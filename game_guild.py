@@ -311,37 +311,24 @@ def logout():
 def main_app():
 
 #테마 설정 상관없이 무조건 밝은색 화면으로 고정
-# CSS 스타일 (강제 적용)
+# CSS 스타일 강제 적용
     st.markdown("""
         <style>
-        /* 1. 전체 배경색 강제 고정 (흰색) */
         .stApp, [data-testid="stAppViewContainer"] {
             background-color: white !important;
             color: black !important;
         }
-        
-        /* 2. 통계 카드(Metric) 박스 디자인 강제 적용 */
         div[data-testid="stMetric"] {
-            background-color: #F0F2F6 !important; /* 연한 회색 */
+            background-color: #F0F2F6 !important;
             border: 1px solid #D6D6D6 !important;
             padding: 15px !important;
             border-radius: 10px !important;
             color: black !important;
         }
-
-        /* 3. 글씨 색상 강제 검정 (제목) */
-        div[data-testid="stMetricLabel"] > label {
+        div[data-testid="stMetricLabel"] > label, [data-testid="stMetricLabel"] {
             color: #31333F !important;
         }
-        [data-testid="stMetricLabel"] {
-            color: #31333F !important;
-        }
-
-        /* 4. 글씨 색상 강제 검정 (숫자 값) */
-        div[data-testid="stMetricValue"] > div {
-            color: #31333F !important;
-        }
-        [data-testid="stMetricValue"] {
+        div[data-testid="stMetricValue"] > div, [data-testid="stMetricValue"] {
             color: #31333F !important;
         }
         </style>
