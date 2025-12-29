@@ -102,27 +102,65 @@ def simulate_ocr_process(uploaded_file):
     time.sleep(1.5) # 처리 시간 시뮬레이션
     return 15000000, "OCR_User_01" # 가상의 인식된 투력과 이름 반환
 
-# --- 5. 로그인 화면 (사이드바) ---
+# --- 5. 로그인 및 길드 생성 화면 (사이드바) ---
 def login_ui():
-    st.sidebar.title("🛡️ 길드 로그인")
-    input_guild_id = st.sidebar.text_input("길드 ID (문서명)", placeholder="example_guild")
-    input_password = st.sidebar.text_input("비밀번호", type="password")
+    st.sidebar.title("🛡️ 이세계 길드 관리자")
     
-    if st.sidebar.button("접속하기"):
-        # 실제로는 DB에 저장된 해시된 비밀번호와 대조해야 함
-        # 데모용: 비밀번호가 '1234'라고 가정하거나, Firestore에서 길드 정보 조회
-        guild_ref = db.collection('guilds').document(input_guild_id)
-        guild_doc = guild_ref.get()
+    # 탭으로 분리: 로그인 vs 회원가입
+    tab1, tab2 = st.sidebar.tabs(["🔑 로그인", "✨ 길드 생성"])
+    
+    # [탭 1] 기존 로그인 기능
+    with tab1:
+        st.subheader("길드 접속")
+        input_guild_id = st.text_input("길드 ID", placeholder="예: my_guild", key="login_id")
+        input_password = st.text_input("비밀번호", type="password", key="login_pw")
         
-        if guild_doc.exists:
-            # 보안을 위해 DB에 저장된 패스워드 필드 확인 권장
-            # 여기서는 편의상 길드 문서가 존재하면 로그인 성공 처리
-            st.session_state['is_logged_in'] = True
-            st.session_state['guild_id'] = input_guild_id
-            st.session_state['guild_name'] = guild_doc.to_dict().get('name', input_guild_id)
-            st.rerun()
-        else:
-            st.sidebar.error("존재하지 않는 길드 ID입니다.")
+        if st.button("접속하기", key="btn_login"):
+            if not input_guild_id or not input_password:
+                st.error("ID와 비밀번호를 입력해주세요.")
+            else:
+                guild_ref = db.collection('guilds').document(input_guild_id)
+                guild_doc = guild_ref.get()
+                
+                if guild_doc.exists:
+                    data = guild_doc.to_dict()
+                    real_pw = data.get('password', '') # DB에 저장된 비번 가져오기
+                    
+                    if real_pw == input_password:
+                        st.session_state['is_logged_in'] = True
+                        st.session_state['guild_id'] = input_guild_id
+                        st.session_state['guild_name'] = data.get('name', input_guild_id)
+                        st.success("로그인 성공!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error("비밀번호가 틀렸습니다.")
+                else:
+                    st.error("존재하지 않는 길드 ID입니다. [길드 생성] 탭에서 먼저 만들어주세요.")
+
+    # [탭 2] 신규 길드 생성 기능 (새로 추가됨!)
+    with tab2:
+        st.subheader("신규 등록")
+        new_guild_id = st.text_input("사용할 길드 ID (영문)", placeholder="예: dragon_knights", key="new_id")
+        new_guild_name = st.text_input("길드 이름 (표시용)", placeholder="예: 드래곤 기사단", key="new_name")
+        new_password = st.text_input("설정할 비밀번호", type="password", key="new_pw")
+        
+        if st.button("길드 만들기", key="btn_create"):
+            if new_guild_id and new_guild_name and new_password:
+                # 1. 중복 체크
+                doc_ref = db.collection('guilds').document(new_guild_id)
+                if doc_ref.get().exists:
+                    st.error("이미 사용 중인 길드 ID입니다. 다른 ID를 써주세요.")
+                else:
+                    # 2. DB에 저장
+                    doc_ref.set({
+                        'name': new_guild_name,
+                        'password': new_password,
+                        'created_at': firestore.SERVER_TIMESTAMP
+                    })
+                    st.success(f"🎉 '{new_guild_name}' 생성 완료! [로그인] 탭에서 접속하세요.")
+            else:
+                st.warning("모든 칸을 입력해주세요.")
 
 def logout():
     st.session_state['is_logged_in'] = False
