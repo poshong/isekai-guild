@@ -334,6 +334,7 @@ def main_app():
         </style>
     """, unsafe_allow_html=True)
 
+
     st.title(f"🏰 {st.session_state['guild_name']} 관리 시스템")
     
     # 상단 메뉴
