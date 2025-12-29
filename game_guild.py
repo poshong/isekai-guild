@@ -78,50 +78,77 @@ def get_guild_members(guild_id):
         data.append(d)
     return pd.DataFrame(data)
 
-# --- 헬퍼 함수: OCR 분석 (새로 추가) ---
+# --- 헬퍼 함수: OCR 분석 (스마트 버전) ---
 @st.cache_resource
 def load_ocr_reader():
     import easyocr
-    return easyocr.Reader(['ko', 'en']) # 한국어, 영어 지원
+    return easyocr.Reader(['ko', 'en']) 
 
 def run_ocr_scan(image_file):
     try:
         reader = load_ocr_reader()
         image_bytes = image_file.read()
-        result = reader.readtext(image_bytes, detail=0) # 텍스트만 추출
+        result = reader.readtext(image_bytes, detail=0)
         
-        text_full = " ".join(result)
-        st.toast(f"읽은 내용: {text_full[:30]}...", icon="👀")
+        # 1. 기부 명단 분석 모드인지 확인 (키워드: '기부')
+        full_text = " ".join(result)
         
-        # 간단한 파싱 로직 (게임 화면에 따라 수정 필요)
-        found_dmg = 0.0
-        found_kill = 0
-        
-        # 숫자 추출 정규식
-        import re
-        # "1.5억" 또는 "123,456" 같은 숫자 찾기
-        numbers = re.findall(r"[\d]+[.,]?[\d]*", text_full)
-        
-        # (알고리즘: 화면에서 가장 큰 소수점 숫자를 피해량으로, 정수를 킬수로 추정)
-        # 실제로는 '피해량' 키워드 뒤의 숫자를 찾는 게 정확합니다.
-        # 여기서는 예시로 단순하게 구현합니다.
-        
-        for num in numbers:
-            clean_num = num.replace(',', '')
-            try:
-                val = float(clean_num)
-                # 피해량은 보통 억 단위라 소수점이거나 큼
-                if val > found_dmg and '.' in num: 
-                    found_dmg = val
-                # 격퇴수는 정수이고 보통 100 이하
-                if val > found_kill and '.' not in num and val < 100:
-                    found_kill = int(val)
-            except:
-                continue
-                
-        return found_dmg, found_kill, "분석 완료"
+        if "기부" in full_text and "님이" in full_text:
+            # 기부 데이터 저장소: { '닉네임': {'basic': 0, 'inter': 0, ...} }
+            donation_counts = {}
+            
+            # 한 줄씩 읽으면서 분석
+            for line in result:
+                if "님이" in line and "기부" in line:
+                    # 닉네임 추출 ( '님이' 앞의 단어 )
+                    parts = line.split("님이")
+                    if len(parts) > 0:
+                        # 앞부분에서 마지막 단어가 닉네임일 확률이 높음 (시간 00:03 등 제외)
+                        name_part = parts[0].strip()
+                        name_tokens = name_part.split()
+                        detected_name = name_tokens[-1] if name_tokens else ""
+                        
+                        if not detected_name: continue
+
+                        if detected_name not in donation_counts:
+                            donation_counts[detected_name] = {'basic':0, 'inter':0, 'adv':0, 'item':0}
+                        
+                        # 기부 종류 판별 (횟수 누적)
+                        # 보통 로그는 "1회"씩 찍히므로 1씩 더함. (4회 라고 적힌 경우 등은 추가 로직 필요하나 일단 1회 기준)
+                        add_val = 1
+                        # 만약 "4회" 같은 텍스트가 있으면 추출 시도
+                        import re
+                        count_match = re.search(r'(\d+)회', line)
+                        if count_match:
+                            add_val = int(count_match.group(1))
+
+                        if "초급" in line: donation_counts[detected_name]['basic'] += add_val
+                        elif "중급" in line: donation_counts[detected_name]['inter'] += add_val
+                        elif "고급" in line: donation_counts[detected_name]['adv'] += add_val
+                        elif "아이템" in line: donation_counts[detected_name]['item'] += add_val
+            
+            return "donation", donation_counts, "기부 내역 분석 완료"
+
+        else:
+            # 2. 현자 도전 (기존 로직)
+            found_dmg = 0.0
+            found_kill = 0
+            
+            import re
+            numbers = re.findall(r"[\d]+[.,]?[\d]*", full_text)
+            
+            for num in numbers:
+                clean_num = num.replace(',', '')
+                try:
+                    val = float(clean_num)
+                    if val > found_dmg and '.' in num: found_dmg = val
+                    if val > found_kill and '.' not in num and val < 100: found_kill = int(val)
+                except: continue
+                    
+            return "sage", {"dmg": found_dmg, "kill": found_kill}, "현자 도전 분석 완료"
+            
     except Exception as e:
-        return 0.0, 0, f"오류 발생: {e}"
+        return "error", {}, f"오류 발생: {e}"
 
 def add_update_member(guild_id, name, cp, role, doc_id=None):
     # 1. 현재 길드원 목록을 가져와서 인원 수 체크
@@ -282,6 +309,33 @@ def logout():
 
 # --- 6. 메인 애플리케이션 로직 ---
 def main_app():
+
+#테마 설정 상관없이 무조건 밝은색 화면으로 고정
+    st.markdown("""
+        <style>
+        /* 1. 전체 배경색 강제 고정 (흰색) */
+        .stApp {
+            background-color: white;
+            color: black;
+        }
+        /* 2. 통계 카드(Metric) 스타일링 */
+        [data-testid="stMetric"] {
+            background-color: #f0f2f6; /* 연한 회색 박스 */
+            border: 1px solid #d6d6d6;
+            padding: 15px;
+            border-radius: 10px;
+            color: black;
+        }
+        /* 3. 글씨 색상 강제 검정 (제목, 숫자) */
+        [data-testid="stMetricLabel"] {
+            color: #31333F !important;
+        }
+        [data-testid="stMetricValue"] {
+            color: #31333F !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     st.title(f"🏰 {st.session_state['guild_name']} 관리 시스템")
     
     # 상단 메뉴
@@ -306,18 +360,20 @@ def main_app():
         else:
             st.info("아직 등록된 길드원이 없습니다.")
 
-    # --- TAB 2: 멤버 관리 (기존과 동일) ---
+    # --- TAB 2: 멤버 관리 (수정 및 삭제) ---
     with tab2:
-        st.header("길드원 명부 관리")
-        # 1. 신규 등록
-        with st.expander("➕ 멤버 수동 등록", expanded=False):
+        st.header("👥 길드원 명부 관리")
+        
+        # 1. 신규 등록 (접기/펼치기)
+        with st.expander("➕ 신규 멤버 등록하기 (클릭)", expanded=False):
             with st.form("add_member_form"):
                 c1, c2, c3 = st.columns(3)
                 new_name = c1.text_input("닉네임")
                 new_cp = c2.number_input("전투력 (단위: 억)", min_value=0.0, step=0.1, format="%.1f") 
                 role_options = ["(선택 안 함)", "길드장", "부길드장", "정예"]
                 new_role = c3.selectbox("직책", role_options)
-                if st.form_submit_button("등록"):
+                
+                if st.form_submit_button("신규 등록"):
                     if new_name:
                         success, msg = add_update_member(st.session_state['guild_id'], new_name, new_cp, new_role)
                         if success:
@@ -329,29 +385,63 @@ def main_app():
                     else:
                         st.warning("닉네임을 입력하세요.")
 
-        # 2. 조회 및 수정
+        st.divider()
+
+        # 2. 조회 및 빠른 수정 (핵심 기능!)
+        st.subheader("📋 멤버 목록 (엑셀처럼 수정 가능)")
+        
         if not df.empty:
-            st.caption("💡 전투력은 '억' 단위입니다.")
+            st.info("💡 닉네임, 전투력, 직책을 더블클릭해서 수정한 뒤, 아래 [저장] 버튼을 꼭 눌러주세요!")
+            
+            # 데이터 에디터 (수정 모드)
             edited_df = st.data_editor(
                 df[['name', 'cp', 'role', 'id']],
                 column_config={
                     "name": "닉네임",
-                    "cp": st.column_config.NumberColumn("전투력 (억)", format="%.1f억"),
+                    "cp": st.column_config.NumberColumn("전투력 (억)", format="%.1f억", min_value=0.0),
                     "role": st.column_config.SelectboxColumn("직책", options=["길드장", "부길드장", "정예", "일반"], required=False),
-                    "id": st.column_config.TextColumn("ID", disabled=True)
+                    "id": st.column_config.TextColumn("ID (시스템용)", disabled=True) # ID는 수정 불가
                 },
                 hide_index=True,
                 use_container_width=True,
+                num_rows="fixed", # 행 추가/삭제는 위아래 별도 버튼으로 관리
                 key="member_editor"
             )
-            with st.popover("🗑️ 멤버 삭제"):
-                del_target = st.selectbox("삭제할 닉네임", df['name'].tolist())
-                if st.button("영구 삭제"):
-                    mem_id = df[df['name'] == del_target]['id'].values[0]
-                    delete_member(st.session_state['guild_id'], mem_id)
-                    st.rerun()
 
-    # --- TAB 3: 일일 숙제 & 분석 (OCR + 그래프 통합) ---
+            # [핵심] 수정사항 일괄 저장 버튼
+            col_save, col_del = st.columns([1, 1])
+            
+            with col_save:
+                if st.button("💾 수정사항 저장", type="primary", use_container_width=True):
+                    with st.spinner("데이터베이스 업데이트 중..."):
+                        # 변경된 데이터프레임을 한 줄씩 읽어서 DB 업데이트
+                        for index, row in edited_df.iterrows():
+                            # ID를 찾아가서 내용 덮어쓰기
+                            db.collection('guilds').document(st.session_state['guild_id']).collection('members').document(row['id']).update({
+                                'name': row['name'],
+                                'cp': row['cp'],
+                                'role': row['role'],
+                                'updated_at': firestore.SERVER_TIMESTAMP
+                            })
+                        st.success("✅ 모든 수정사항이 저장되었습니다!")
+                        time.sleep(1)
+                        st.rerun()
+
+            # 3. 삭제 기능
+            with col_del:
+                with st.popover("🗑️ 멤버 삭제하기", use_container_width=True):
+                    st.write("삭제할 멤버를 선택하세요 (복구 불가)")
+                    del_target = st.selectbox("삭제 대상", df['name'].tolist(), key="del_select")
+                    
+                    if st.button("🚨 영구 삭제", type="primary"):
+                        mem_id = df[df['name'] == del_target]['id'].values[0]
+                        delete_member(st.session_state['guild_id'], mem_id)
+                        st.warning(f"{del_target} 님이 삭제되었습니다.")
+                        time.sleep(1)
+                        st.rerun()
+        else:
+            st.info("등록된 길드원이 없습니다. 위에서 등록해주세요.")
+ # --- TAB 3: 일일 숙제 & 분석 (자동 입력 기능 강화) ---
     with tab3:
         st.header("📝 일일 활동 기록")
         
@@ -359,26 +449,27 @@ def main_app():
         selected_date = col_date.date_input("날짜 선택", datetime.now())
         date_str = selected_date.strftime("%Y-%m-%d")
         
-        # 스캔된 값 임시 저장소 초기화
-        if 'scan_dmg' not in st.session_state: st.session_state['scan_dmg'] = 0.0
-        if 'scan_kill' not in st.session_state: st.session_state['scan_kill'] = 0
+        # 스캔 데이터 세션 초기화
+        if 'scan_data' not in st.session_state: st.session_state['scan_data'] = {}
+        if 'scan_mode' not in st.session_state: st.session_state['scan_mode'] = None
         
         with col_upload:
-            uploaded_file = st.file_uploader("📸 현자/기부 스크린샷", type=['png', 'jpg'])
+            uploaded_file = st.file_uploader("📸 스크린샷 (기부로그 / 현자도전)", type=['png', 'jpg', 'jpeg'])
             
-            # [OCR] 스마트 분석 버튼
             if uploaded_file:
-                if st.button("🔍 스크린샷 스마트 분석 (Beta)", type="primary"):
+                if st.button("🔍 스크린샷 스마트 분석", type="primary"):
                     with st.spinner("이미지를 분석 중입니다..."):
-                        dmg, kill, msg = run_ocr_scan(uploaded_file)
-                        st.session_state['scan_dmg'] = dmg
-                        st.session_state['scan_kill'] = kill
+                        mode, result_data, msg = run_ocr_scan(uploaded_file)
+                        st.session_state['scan_mode'] = mode
+                        st.session_state['scan_data'] = result_data
                         
-                        if dmg > 0 or kill > 0:
-                            st.success(f"분석 성공! 피해량: {dmg}억 / 격퇴: {kill}회")
+                        if mode == "donation":
+                            st.success(f"📜 기부 명단 인식 성공! ({len(result_data)}명 감지)")
+                        elif mode == "sage":
+                            st.success(f"🔥 현자 도전 인식 성공! (피해량: {result_data['dmg']}억)")
                         else:
-                            st.warning("숫자를 찾지 못했습니다. 직접 입력해주세요.")
-                        uploaded_file.seek(0) # 파일 포인터 초기화
+                            st.error(msg)
+                        uploaded_file.seek(0)
 
         st.divider()
 
@@ -390,44 +481,71 @@ def main_app():
         else:
             daily_record = get_daily_data(st.session_state['guild_id'], date_str)
             
+            # [핵심] 스캔된 데이터를 표에 자동 반영하기 위한 로직
+            scanned = st.session_state['scan_data']
+            mode = st.session_state['scan_mode']
+            
             display_data = []
             for index, row in members_df.iterrows():
                 mem_id = row['id']
-                record = daily_record.get(mem_id, {})
+                mem_name = row['name']
+                
+                # DB에 저장된 기존 값 가져오기
+                d_basic = record.get("don_basic", 0)
+                d_inter = record.get("don_inter", 0)
+                d_adv = record.get("don_adv", 0)
+                d_item = record.get("don_item", 0)
+                s_dmg = record.get("sage_dmg", 0.0)
+                s_kill = record.get("sage_kill", 0)
+                
+                # 🔄 [자동 입력] 스캔 데이터가 있고, 닉네임이 일치하면 덮어쓰기!
+                if mode == "donation" and mem_name in scanned:
+                    user_scan = scanned[mem_name]
+                    # 기존 값에 더할지, 덮어쓸지 결정 (여기선 덮어쓰기 적용)
+                    if user_scan['basic'] > 0: d_basic = user_scan['basic']
+                    if user_scan['inter'] > 0: d_inter = user_scan['inter']
+                    if user_scan['adv'] > 0: d_adv = user_scan['adv']
+                    if user_scan['item'] > 0: d_item = user_scan['item']
+                
+                # 현자 도전은 '현재 접속자' 또는 '단일 대상'이라고 가정할 경우 (선택사항)
+                # 여기서는 자동 매핑이 어려우므로 상단 메시지로 보여주고 수동 입력을 유도하거나
+                # 만약 이미지에 닉네임까지 있다면 매핑 가능 (현재 로직은 값만 가져옴)
                 
                 display_data.append({
                     "id": mem_id,
-                    "name": row['name'],
-                    "don_basic": record.get("don_basic", 0),
-                    "don_inter": record.get("don_inter", 0),
-                    "don_adv": record.get("don_adv", 0),
-                    "don_item": record.get("don_item", 0),
-                    "sage_dmg": record.get("sage_dmg", 0.0),
-                    "sage_kill": record.get("sage_kill", 0)
+                    "name": mem_name,
+                    "don_basic": d_basic,
+                    "don_inter": d_inter,
+                    "don_adv": d_adv,
+                    "don_item": d_item,
+                    "sage_dmg": s_dmg,
+                    "sage_kill": s_kill
                 })
             
-            # 스캔 결과 알림
-            if st.session_state['scan_dmg'] > 0:
-                st.info(f"💡 방금 스캔된 결과: **피해량 {st.session_state['scan_dmg']}억 / 격퇴 {st.session_state['scan_kill']}회** (아래 표에서 해당 멤버에게 입력해주세요)")
-            
+            # 현자 도전 스캔 결과는 닉네임 매칭이 어려우니 힌트로 띄워줌
+            if mode == "sage":
+                st.info(f"💡 현자 스캔 결과: 피해량 **{scanned['dmg']}억** / 격퇴 **{scanned['kill']}회** (해당하는 멤버에게 입력해주세요)")
+            elif mode == "donation":
+                st.info("💡 기부 내역이 닉네임에 맞춰 자동으로 입력되었습니다. (맞는지 확인 후 저장하세요)")
+
             record_df = pd.DataFrame(display_data)
             
-            st.caption(f"📅 {date_str} 활동 입력")
+            # 표 출력
             edited_record = st.data_editor(
                 record_df,
                 column_config={
                     "id": None,
                     "name": st.column_config.TextColumn("닉네임", disabled=True),
-                    "don_basic": st.column_config.NumberColumn("기부(초급)", min_value=0, max_value=4, step=1),
-                    "don_inter": st.column_config.NumberColumn("기부(중급)", min_value=0, max_value=1, step=1),
-                    "don_adv": st.column_config.NumberColumn("기부(고급)", min_value=0, max_value=1, step=1),
-                    "don_item": st.column_config.NumberColumn("기부(템)", min_value=0, max_value=2, step=1),
+                    "don_basic": st.column_config.NumberColumn("기부(초급)", min_value=0, max_value=10, step=1), # 스캔 누적을 위해 max 상향
+                    "don_inter": st.column_config.NumberColumn("기부(중급)", min_value=0, max_value=5, step=1),
+                    "don_adv": st.column_config.NumberColumn("기부(고급)", min_value=0, max_value=5, step=1),
+                    "don_item": st.column_config.NumberColumn("기부(템)", min_value=0, max_value=10, step=1),
                     "sage_dmg": st.column_config.NumberColumn("🔥 피해량(억)", format="%.1f"),
                     "sage_kill": st.column_config.NumberColumn("☠️ 격퇴", step=1),
                 },
                 hide_index=True,
                 use_container_width=True,
-                height=400
+                height=500
             )
             
             if st.button("💾 기록 저장", type="primary", use_container_width=True):
@@ -445,6 +563,7 @@ def main_app():
                 st.toast(f"✅ {date_str} 기록 저장 완료!", icon="💾")
 
         st.divider()
+        # (아래 그래프 코드는 그대로 유지)
         
         # 2. 분석 그래프 섹션 (기존 기능 유지)
         st.header("📈 활동 분석 그래프")
