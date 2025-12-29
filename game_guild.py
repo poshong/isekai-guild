@@ -440,7 +440,7 @@ def main_app():
                         st.rerun()
         else:
             st.info("등록된 길드원이 없습니다. 위에서 등록해주세요.")
- # --- TAB 3: 일일 숙제 & 분석 (자동 입력 기능 강화) ---
+# --- TAB 3: 일일 숙제 & 분석 (수정된 버전) ---
     with tab3:
         st.header("📝 일일 활동 기록")
         
@@ -480,7 +480,7 @@ def main_app():
         else:
             daily_record = get_daily_data(st.session_state['guild_id'], date_str)
             
-            # [핵심] 스캔된 데이터를 표에 자동 반영하기 위한 로직
+            # 스캔 데이터 준비
             scanned = st.session_state['scan_data']
             mode = st.session_state['scan_mode']
             
@@ -489,7 +489,11 @@ def main_app():
                 mem_id = row['id']
                 mem_name = row['name']
                 
-                # DB에 저장된 기존 값 가져오기
+                # ▼▼▼ [이 줄이 빠져서 에러가 났었습니다! 복구 완료] ▼▼▼
+                record = daily_record.get(mem_id, {})
+                # ▲▲▲
+                
+                # DB 값 가져오기
                 d_basic = record.get("don_basic", 0)
                 d_inter = record.get("don_inter", 0)
                 d_adv = record.get("don_adv", 0)
@@ -497,18 +501,13 @@ def main_app():
                 s_dmg = record.get("sage_dmg", 0.0)
                 s_kill = record.get("sage_kill", 0)
                 
-                # 🔄 [자동 입력] 스캔 데이터가 있고, 닉네임이 일치하면 덮어쓰기!
+                # 자동 입력 로직 (기부)
                 if mode == "donation" and mem_name in scanned:
                     user_scan = scanned[mem_name]
-                    # 기존 값에 더할지, 덮어쓸지 결정 (여기선 덮어쓰기 적용)
                     if user_scan['basic'] > 0: d_basic = user_scan['basic']
                     if user_scan['inter'] > 0: d_inter = user_scan['inter']
                     if user_scan['adv'] > 0: d_adv = user_scan['adv']
                     if user_scan['item'] > 0: d_item = user_scan['item']
-                
-                # 현자 도전은 '현재 접속자' 또는 '단일 대상'이라고 가정할 경우 (선택사항)
-                # 여기서는 자동 매핑이 어려우므로 상단 메시지로 보여주고 수동 입력을 유도하거나
-                # 만약 이미지에 닉네임까지 있다면 매핑 가능 (현재 로직은 값만 가져옴)
                 
                 display_data.append({
                     "id": mem_id,
@@ -521,7 +520,7 @@ def main_app():
                     "sage_kill": s_kill
                 })
             
-            # 현자 도전 스캔 결과는 닉네임 매칭이 어려우니 힌트로 띄워줌
+            # 안내 메시지
             if mode == "sage":
                 st.info(f"💡 현자 스캔 결과: 피해량 **{scanned['dmg']}억** / 격퇴 **{scanned['kill']}회** (해당하는 멤버에게 입력해주세요)")
             elif mode == "donation":
@@ -535,7 +534,7 @@ def main_app():
                 column_config={
                     "id": None,
                     "name": st.column_config.TextColumn("닉네임", disabled=True),
-                    "don_basic": st.column_config.NumberColumn("기부(초급)", min_value=0, max_value=10, step=1), # 스캔 누적을 위해 max 상향
+                    "don_basic": st.column_config.NumberColumn("기부(초급)", min_value=0, max_value=10, step=1),
                     "don_inter": st.column_config.NumberColumn("기부(중급)", min_value=0, max_value=5, step=1),
                     "don_adv": st.column_config.NumberColumn("기부(고급)", min_value=0, max_value=5, step=1),
                     "don_item": st.column_config.NumberColumn("기부(템)", min_value=0, max_value=10, step=1),
@@ -562,7 +561,7 @@ def main_app():
                 st.toast(f"✅ {date_str} 기록 저장 완료!", icon="💾")
 
         st.divider()
-        # (아래 그래프 코드는 그대로 유지)
+        
         
         # 2. 분석 그래프 섹션 (기존 기능 유지)
         st.header("📈 활동 분석 그래프")
