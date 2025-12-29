@@ -334,6 +334,39 @@ def main_app():
             color: #31333F !important;
         }
         </style>
+    """, unsafe_allow_html=True)st.markdown("""
+        <style>
+        /* 1. 전체 배경색 강제 고정 (흰색) */
+        .stApp, [data-testid="stAppViewContainer"] {
+            background-color: white !important;
+            color: black !important;
+        }
+        
+        /* 2. 통계 카드(Metric) 박스 디자인 강제 적용 */
+        div[data-testid="stMetric"] {
+            background-color: #F0F2F6 !important; /* 연한 회색 */
+            border: 1px solid #D6D6D6 !important;
+            padding: 15px !important;
+            border-radius: 10px !important;
+            color: black !important;
+        }
+
+        /* 3. 글씨 색상 강제 검정 (제목) */
+        div[data-testid="stMetricLabel"] > label {
+            color: #31333F !important;
+        }
+        [data-testid="stMetricLabel"] {
+            color: #31333F !important;
+        }
+
+        /* 4. 글씨 색상 강제 검정 (숫자 값) */
+        div[data-testid="stMetricValue"] > div {
+            color: #31333F !important;
+        }
+        [data-testid="stMetricValue"] {
+            color: #31333F !important;
+        }
+        </style>
     """, unsafe_allow_html=True)
 
     st.title(f"🏰 {st.session_state['guild_name']} 관리 시스템")
