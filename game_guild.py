@@ -5,6 +5,9 @@ import pandas as pd
 import plotly.express as px
 import json
 import time
+from datetime import datetime, timedelta
+import easyocr
+import re
 
 # --- 1. 페이지 설정 및 디자인 ---
 st.set_page_config(
@@ -75,6 +78,51 @@ def get_guild_members(guild_id):
         data.append(d)
     return pd.DataFrame(data)
 
+# --- 헬퍼 함수: OCR 분석 (새로 추가) ---
+@st.cache_resource
+def load_ocr_reader():
+    import easyocr
+    return easyocr.Reader(['ko', 'en']) # 한국어, 영어 지원
+
+def run_ocr_scan(image_file):
+    try:
+        reader = load_ocr_reader()
+        image_bytes = image_file.read()
+        result = reader.readtext(image_bytes, detail=0) # 텍스트만 추출
+        
+        text_full = " ".join(result)
+        st.toast(f"읽은 내용: {text_full[:30]}...", icon="👀")
+        
+        # 간단한 파싱 로직 (게임 화면에 따라 수정 필요)
+        found_dmg = 0.0
+        found_kill = 0
+        
+        # 숫자 추출 정규식
+        import re
+        # "1.5억" 또는 "123,456" 같은 숫자 찾기
+        numbers = re.findall(r"[\d]+[.,]?[\d]*", text_full)
+        
+        # (알고리즘: 화면에서 가장 큰 소수점 숫자를 피해량으로, 정수를 킬수로 추정)
+        # 실제로는 '피해량' 키워드 뒤의 숫자를 찾는 게 정확합니다.
+        # 여기서는 예시로 단순하게 구현합니다.
+        
+        for num in numbers:
+            clean_num = num.replace(',', '')
+            try:
+                val = float(clean_num)
+                # 피해량은 보통 억 단위라 소수점이거나 큼
+                if val > found_dmg and '.' in num: 
+                    found_dmg = val
+                # 격퇴수는 정수이고 보통 100 이하
+                if val > found_kill and '.' not in num and val < 100:
+                    found_kill = int(val)
+            except:
+                continue
+                
+        return found_dmg, found_kill, "분석 완료"
+    except Exception as e:
+        return 0.0, 0, f"오류 발생: {e}"
+
 def add_update_member(guild_id, name, cp, role, doc_id=None):
     # 1. 현재 길드원 목록을 가져와서 인원 수 체크
     current_members = get_guild_members(guild_id)
@@ -132,6 +180,40 @@ def simulate_ocr_process(uploaded_file):
     # 실제 구현 시: reader.readtext(image) 사용
     time.sleep(1.5) # 처리 시간 시뮬레이션
     return 15000000, "OCR_User_01" # 가상의 인식된 투력과 이름 반환
+
+# [새로 추가] 날짜별 데이터 가져오기
+def get_daily_data(guild_id, date_str):
+    doc_ref = db.collection('guilds').document(guild_id).collection('daily_records').document(date_str)
+    doc = doc_ref.get()
+    if doc.exists:
+        return doc.to_dict()
+    return {}
+
+# [새로 추가] 날짜별 데이터 저장하기
+def save_daily_data(guild_id, date_str, data_dict):
+    doc_ref = db.collection('guilds').document(guild_id).collection('daily_records').document(date_str)
+    doc_ref.set(data_dict, merge=True)
+
+# [새로 추가] 특정 기간 동안의 모든 기록 가져오기 (그래프용)
+def fetch_period_records(guild_id, start_date, end_date):
+    # start_date부터 end_date까지 하루씩 반복하며 데이터 수집
+    period_data = []
+    current_date = start_date
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y-%m-%d")
+        daily_doc = db.collection('guilds').document(guild_id).collection('daily_records').document(date_str).get()
+        
+        if daily_doc.exists:
+            records = daily_doc.to_dict()
+            for mem_id, data in records.items():
+                # 그래프 그리기 편하게 데이터 구조 변경 (Flatten)
+                row = {'date': current_date, 'member_id': mem_id}
+                row.update(data) # 기존 데이터(기부 내역, 현자 내역) 합치기
+                period_data.append(row)
+                
+        current_date += timedelta(days=1)
+    
+    return pd.DataFrame(period_data)
 
 # --- 5. 로그인 및 길드 생성 화면 (사이드바) ---
 def login_ui():
@@ -200,165 +282,203 @@ def logout():
 
 # --- 6. 메인 애플리케이션 로직 ---
 def main_app():
-    st.sidebar.success(f"접속 중: {st.session_state['guild_name']}")
-    if st.sidebar.button("로그아웃"):
-        logout()
-        
-    st.title(f"🏰 {st.session_state['guild_name']} 길드 관리 시스템")
+    st.title(f"🏰 {st.session_state['guild_name']} 관리 시스템")
     
-    # 데이터 로드
-    df = get_guild_members(st.session_state['guild_id'])
-    
-    if df.empty:
-        st.warning("아직 등록된 길드원이 없습니다. 멤버를 추가해주세요!")
-        df = pd.DataFrame(columns=['name', 'cp', 'job', 'id']) # 빈 프레임 생성
+    # 상단 메뉴
+    tab1, tab2, tab3 = st.tabs(["📊 대시보드", "👥 멤버 관리", "📅 일일 숙제 & 분석"])
 
-    # 탭 구성
-    tab1, tab2, tab3 = st.tabs(["📊 통계 대시보드", "👥 멤버 관리", "📷 OCR 투력 스캔"])
-
-    # --- TAB 1: 통계 대시보드 ---
+    # --- TAB 1: 대시보드 (기존과 동일) ---
     with tab1:
-        st.header("길드 전력 분석")
-        
+        st.header("길드 현황판")
+        df = get_guild_members(st.session_state['guild_id'])
         if not df.empty:
-            # KPI 지표
             col1, col2, col3 = st.columns(3)
             col1.metric("총 길드원", f"{len(df)}명")
-            col1.caption("정예 멤버")
-            
             total_cp = df['cp'].sum()
-            col2.metric("총 전투력 (Total CP)", f"{total_cp:,.0f}")
-            col2.caption("서버 랭킹 도전!")
-            
-            avg_cp = df['cp'].mean()
-            col3.metric("평균 전투력", f"{avg_cp:,.0f}")
-            
+            col2.metric("총 전투력", f"{total_cp:,.0f}억")
+            avg_cp = total_cp / len(df)
+            col3.metric("평균 전투력", f"{avg_cp:,.1f}억")
             st.divider()
-            
-            # 차트 영역
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                st.subheader("전투력 순위 Top 10")
-                top_10 = df.sort_values(by='cp', ascending=False).head(10)
-                fig_bar = px.bar(top_10, x='cp', y='name', orientation='h', 
-                                 text_auto='.2s', title="상위 랭커", color='cp',
-                                 color_continuous_scale='Oranges')
-                fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-                st.plotly_chart(fig_bar, use_container_width=True)
-            
-            with c2:
-                st.subheader("직업 분포")
-                if 'job' in df.columns:
-                    fig_pie = px.pie(df, names='job', title="클래스 비율", hole=0.4)
-                    st.plotly_chart(fig_pie, use_container_width=True)
+            if 'role' in df.columns:
+                role_counts = df['role'].value_counts().reset_index()
+                role_counts.columns = ['직책', '인원']
+                st.bar_chart(role_counts.set_index('직책'))
+        else:
+            st.info("아직 등록된 길드원이 없습니다.")
 
-    # --- TAB 2: 멤버 관리 (CRUD) ---
+    # --- TAB 2: 멤버 관리 (기존과 동일) ---
     with tab2:
         st.header("길드원 명부 관리")
-        
-        # 1. 멤버 추가 폼
-        with st.expander("➕ 신규 멤버 등록하기", expanded=True):
+        # 1. 신규 등록
+        with st.expander("➕ 멤버 수동 등록", expanded=False):
             with st.form("add_member_form"):
-                col_a, col_b, col_c = st.columns(3)
-                new_name = col_a.text_input("닉네임")
-                new_cp = col_b.number_input("전투력", min_value=0, step=1000, format="%d")
-                
-                # 직업 대신 직책 선택 (선택 안 함 가능)
+                c1, c2, c3 = st.columns(3)
+                new_name = c1.text_input("닉네임")
+                new_cp = c2.number_input("전투력 (단위: 억)", min_value=0.0, step=0.1, format="%.1f") 
                 role_options = ["(선택 안 함)", "길드장", "부길드장", "정예"]
-                new_role = col_c.selectbox("직책 (선택)", role_options)
-                
-                submitted = st.form_submit_button("등록")
-                if submitted:
+                new_role = c3.selectbox("직책", role_options)
+                if st.form_submit_button("등록"):
                     if new_name:
-                        # role 값이 "(선택 안 함)"이면 빈 값으로 처리하거나 "일반"으로 처리됨
                         success, msg = add_update_member(st.session_state['guild_id'], new_name, new_cp, new_role)
-                        
                         if success:
-                            st.success(f"{new_name} {msg}!")
-                            time.sleep(1)
+                            st.success(f"{new_name} 등록 완료!")
+                            time.sleep(0.5)
                             st.rerun()
                         else:
-                            st.error(msg) # 정원 초과 메시지 출력
+                            st.error(msg)
                     else:
-                        st.error("닉네임을 입력하세요.")
+                        st.warning("닉네임을 입력하세요.")
 
-        # 2. 데이터 에디터 (빠른 수정)
-        st.subheader("멤버 목록 (수정 가능)")
-        
-        # 표시할 컬럼 정리 (job -> role)
-        # 데이터가 없을 때를 대비해 컬럼 확인
-        if 'role' not in df.columns:
-            df['role'] = '일반' # 기존 데이터 호환성
-            
-        edited_df = st.data_editor(
-            df[['name', 'cp', 'role', 'id']], 
-            column_config={
-                "name": "닉네임",
-                "cp": st.column_config.NumberColumn("전투력", format="%d"),
-                "role": st.column_config.SelectboxColumn(
-                    "직책",
-                    options=["길드장", "부길드장", "정예", "일반"],
-                    required=False
-                ),
-                "id": st.column_config.TextColumn("ID (시스템용)", disabled=True)
-            },
-            num_rows="dynamic",
-            key="member_editor"
-        )
-        
-        st.divider()
-        # (삭제 버튼 코드는 기존과 동일하게 유지)
-        st.subheader("멤버 삭제")
+        # 2. 조회 및 수정
         if not df.empty:
-            target_member = st.selectbox("삭제할 멤버 선택", df['name'].tolist())
-            if st.button("선택한 멤버 삭제"):
-                member_id = df[df['name'] == target_member]['id'].values[0]
-                delete_member(st.session_state['guild_id'], member_id)
-                st.warning(f"{target_member} 님이 삭제되었습니다.")
-                time.sleep(1)
-                st.rerun()
-
-    # --- TAB 3: OCR 투력 스캔 ---
-    with tab3:
-        st.header("📸 스크린샷 투력 인식")
-        st.write("게임 내 '내 정보' 화면을 캡처하여 업로드하면 전투력을 자동으로 읽어옵니다.")
-        
-        uploaded_file = st.file_uploader("이미지 파일 업로드", type=['png', 'jpg', 'jpeg'])
-        
-        if uploaded_file is not None:
-            st.image(uploaded_file, caption="업로드된 이미지", width=300)
-            
-            if st.button("투력 추출 시작"):
-                with st.spinner("이미지 분석 중... (마법 시전 중 🧙‍♂️)"):
-                    # 실제 OCR 연동 시 여기서 easyocr 함수 호출
-                    recognized_cp, recognized_name = simulate_ocr_process(uploaded_file)
-                
-                st.success("분석 완료!")
-                
-                col_ocr1, col_ocr2 = st.columns(2)
-                ocr_name = col_ocr1.text_input("인식된 닉네임", value=recognized_name)
-                ocr_cp = col_ocr2.number_input("인식된 투력", value=recognized_cp)
-                
-                if st.button("이 정보로 업데이트/등록"):
-                    # 이름으로 기존 멤버 찾기 (간소화된 로직)
-                    existing_member = df[df['name'] == ocr_name]
-                    
-                    if not existing_member.empty:
-                        doc_id = existing_member.iloc[0]['id']
-                        # 직업 정보는 기존 유지
-                        job = existing_member.iloc[0]['job']
-                        add_update_member(st.session_state['guild_id'], ocr_name, ocr_cp, job, doc_id)
-                        st.success(f"{ocr_name}님의 투력이 {ocr_cp}로 업데이트되었습니다!")
-                    else:
-                        st.info("신규 멤버입니다. 직업을 선택해주세요.")
-                        job_sel = st.selectbox("직업 선택", ["전사", "마법사", "궁수", "성직자", "기타"], key="ocr_job")
-                        if st.button("신규 등록 확정"):
-                            add_update_member(st.session_state['guild_id'], ocr_name, ocr_cp, job_sel)
-                            st.success("등록 완료!")
-                            st.rerun()
-                    
-                    time.sleep(1.5)
+            st.caption("💡 전투력은 '억' 단위입니다.")
+            edited_df = st.data_editor(
+                df[['name', 'cp', 'role', 'id']],
+                column_config={
+                    "name": "닉네임",
+                    "cp": st.column_config.NumberColumn("전투력 (억)", format="%.1f억"),
+                    "role": st.column_config.SelectboxColumn("직책", options=["길드장", "부길드장", "정예", "일반"], required=False),
+                    "id": st.column_config.TextColumn("ID", disabled=True)
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="member_editor"
+            )
+            with st.popover("🗑️ 멤버 삭제"):
+                del_target = st.selectbox("삭제할 닉네임", df['name'].tolist())
+                if st.button("영구 삭제"):
+                    mem_id = df[df['name'] == del_target]['id'].values[0]
+                    delete_member(st.session_state['guild_id'], mem_id)
                     st.rerun()
+
+    # --- TAB 3: 일일 숙제 & 분석 (OCR + 그래프 통합) ---
+    with tab3:
+        st.header("📝 일일 활동 기록")
+        
+        col_date, col_upload = st.columns([1, 2])
+        selected_date = col_date.date_input("날짜 선택", datetime.now())
+        date_str = selected_date.strftime("%Y-%m-%d")
+        
+        # 스캔된 값 임시 저장소 초기화
+        if 'scan_dmg' not in st.session_state: st.session_state['scan_dmg'] = 0.0
+        if 'scan_kill' not in st.session_state: st.session_state['scan_kill'] = 0
+        
+        with col_upload:
+            uploaded_file = st.file_uploader("📸 현자/기부 스크린샷", type=['png', 'jpg'])
+            
+            # [OCR] 스마트 분석 버튼
+            if uploaded_file:
+                if st.button("🔍 스크린샷 스마트 분석 (Beta)", type="primary"):
+                    with st.spinner("이미지를 분석 중입니다..."):
+                        dmg, kill, msg = run_ocr_scan(uploaded_file)
+                        st.session_state['scan_dmg'] = dmg
+                        st.session_state['scan_kill'] = kill
+                        
+                        if dmg > 0 or kill > 0:
+                            st.success(f"분석 성공! 피해량: {dmg}억 / 격퇴: {kill}회")
+                        else:
+                            st.warning("숫자를 찾지 못했습니다. 직접 입력해주세요.")
+                        uploaded_file.seek(0) # 파일 포인터 초기화
+
+        st.divider()
+
+        # 1. 데이터 입력 표 (Data Editor)
+        members_df = get_guild_members(st.session_state['guild_id'])
+        
+        if members_df.empty:
+            st.warning("먼저 [멤버 관리] 탭에서 길드원을 등록해주세요.")
+        else:
+            daily_record = get_daily_data(st.session_state['guild_id'], date_str)
+            
+            display_data = []
+            for index, row in members_df.iterrows():
+                mem_id = row['id']
+                record = daily_record.get(mem_id, {})
+                
+                display_data.append({
+                    "id": mem_id,
+                    "name": row['name'],
+                    "don_basic": record.get("don_basic", 0),
+                    "don_inter": record.get("don_inter", 0),
+                    "don_adv": record.get("don_adv", 0),
+                    "don_item": record.get("don_item", 0),
+                    "sage_dmg": record.get("sage_dmg", 0.0),
+                    "sage_kill": record.get("sage_kill", 0)
+                })
+            
+            # 스캔 결과 알림
+            if st.session_state['scan_dmg'] > 0:
+                st.info(f"💡 방금 스캔된 결과: **피해량 {st.session_state['scan_dmg']}억 / 격퇴 {st.session_state['scan_kill']}회** (아래 표에서 해당 멤버에게 입력해주세요)")
+            
+            record_df = pd.DataFrame(display_data)
+            
+            st.caption(f"📅 {date_str} 활동 입력")
+            edited_record = st.data_editor(
+                record_df,
+                column_config={
+                    "id": None,
+                    "name": st.column_config.TextColumn("닉네임", disabled=True),
+                    "don_basic": st.column_config.NumberColumn("기부(초급)", min_value=0, max_value=4, step=1),
+                    "don_inter": st.column_config.NumberColumn("기부(중급)", min_value=0, max_value=1, step=1),
+                    "don_adv": st.column_config.NumberColumn("기부(고급)", min_value=0, max_value=1, step=1),
+                    "don_item": st.column_config.NumberColumn("기부(템)", min_value=0, max_value=2, step=1),
+                    "sage_dmg": st.column_config.NumberColumn("🔥 피해량(억)", format="%.1f"),
+                    "sage_kill": st.column_config.NumberColumn("☠️ 격퇴", step=1),
+                },
+                hide_index=True,
+                use_container_width=True,
+                height=400
+            )
+            
+            if st.button("💾 기록 저장", type="primary", use_container_width=True):
+                data_to_save = {}
+                for index, row in edited_record.iterrows():
+                    data_to_save[row['id']] = {
+                        "don_basic": row['don_basic'],
+                        "don_inter": row['don_inter'],
+                        "don_adv": row['don_adv'],
+                        "don_item": row['don_item'],
+                        "sage_dmg": row['sage_dmg'],
+                        "sage_kill": row['sage_kill']
+                    }
+                save_daily_data(st.session_state['guild_id'], date_str, data_to_save)
+                st.toast(f"✅ {date_str} 기록 저장 완료!", icon="💾")
+
+        st.divider()
+        
+        # 2. 분석 그래프 섹션 (기존 기능 유지)
+        st.header("📈 활동 분석 그래프")
+        
+        analysis_range = st.radio("분석 기간", ["최근 7일 (주간)", "최근 30일 (월간)"], horizontal=True)
+        days_to_subtract = 7 if analysis_range == "최근 7일 (주간)" else 30
+        
+        end_date_anal = datetime.now().date()
+        start_date_anal = end_date_anal - timedelta(days=days_to_subtract-1)
+        
+        period_df = fetch_period_records(st.session_state['guild_id'], start_date_anal, end_date_anal)
+        
+        if period_df.empty:
+            st.info("데이터가 없습니다.")
+        else:
+            merged_df = pd.merge(period_df, members_df[['id', 'name']], left_on='member_id', right_on='id', how='left')
+            
+            anal_tab1, anal_tab2 = st.tabs(["🔥 현자 도전", "💰 기부 현황"])
+            
+            with anal_tab1:
+                st.subheader("일별 현자 피해량 추이")
+                chart_data = merged_df[['date', 'name', 'sage_dmg']].rename(columns={'sage_dmg': '피해량'})
+                st.line_chart(chart_data, x='date', y='피해량', color='name')
+
+            with anal_tab2:
+                st.subheader("기간 내 총 기부")
+                donation_sum = merged_df.groupby('name')[['don_basic', 'don_inter', 'don_adv', 'don_item']].sum().reset_index()
+                donation_melted = donation_sum.melt('name', var_name='기부유형', value_name='횟수')
+                
+                import altair as alt
+                chart = alt.Chart(donation_melted).mark_bar().encode(
+                    x='name', y='횟수', color='기부유형', tooltip=['name', '기부유형', '횟수']
+                ).interactive()
+                st.altair_chart(chart, use_container_width=True)
 
 # --- 실행 흐름 제어 ---
 if __name__ == "__main__":
