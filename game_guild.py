@@ -75,22 +75,53 @@ def get_guild_members(guild_id):
         data.append(d)
     return pd.DataFrame(data)
 
-def add_update_member(guild_id, name, cp, job, doc_id=None):
+def add_update_member(guild_id, name, cp, role, doc_id=None):
+    # 1. 현재 길드원 목록을 가져와서 인원 수 체크
+    current_members = get_guild_members(guild_id)
+    
+    # 제한 인원 설정
+    limits = {
+        "길드장": 1,
+        "부길드장": 3,
+        "정예": 4
+    }
+    
+    # 신규 등록이거나, 역할을 변경하는 경우 인원 제한 체크
+    if role in limits:
+        # 해당 직책을 가진 사람 수 계산
+        if not current_members.empty and 'role' in current_members.columns:
+            count = len(current_members[current_members['role'] == role])
+            
+            # 수정(Update)일 경우, 자기 자신은 카운트에서 제외해야 함 (이미 그 직책인 경우)
+            if doc_id:
+                existing_user = current_members[current_members['id'] == doc_id]
+                if not existing_user.empty and existing_user.iloc[0].get('role') == role:
+                    count -= 1
+            
+            # 제한 확인
+            if count >= limits[role]:
+                return False, f"⚠️ '{role}' 정원 초과입니다. (최대 {limits[role]}명)"
+
+    # 2. DB 저장/수정 로직
     collection_ref = db.collection('guilds').document(guild_id).collection('members')
+    
+    # 직책이 없으면 '일반'으로 저장
+    final_role = role if role and role != "(선택 안 함)" else "일반"
+    
     data = {
         'name': name,
         'cp': int(cp),
-        'job': job,
+        'role': final_role,  # 'job' 대신 'role' 사용
         'updated_at': firestore.SERVER_TIMESTAMP
     }
     
     if doc_id:
         collection_ref.document(doc_id).update(data)
-        return "수정 완료"
+        return True, "수정 완료"
     else:
         # 이름 중복 체크 (선택 사항)
         collection_ref.add(data)
-        return "등록 완료"
+        return True, "등록 완료"
 
 def delete_member(guild_id, doc_id):
     db.collection('guilds').document(guild_id).collection('members').document(doc_id).delete()
@@ -226,51 +257,66 @@ def main_app():
         st.header("길드원 명부 관리")
         
         # 1. 멤버 추가 폼
-        with st.expander("➕ 신규 멤버 등록하기"):
+        with st.expander("➕ 신규 멤버 등록하기", expanded=True):
             with st.form("add_member_form"):
                 col_a, col_b, col_c = st.columns(3)
                 new_name = col_a.text_input("닉네임")
-                new_cp = col_b.number_input("전투력", min_value=0, step=1000)
-                new_job = col_c.selectbox("직업", ["전사", "마법사", "궁수", "성직자", "기타"])
+                new_cp = col_b.number_input("전투력", min_value=0, step=1000, format="%d")
+                
+                # 직업 대신 직책 선택 (선택 안 함 가능)
+                role_options = ["(선택 안 함)", "길드장", "부길드장", "정예"]
+                new_role = col_c.selectbox("직책 (선택)", role_options)
                 
                 submitted = st.form_submit_button("등록")
                 if submitted:
                     if new_name:
-                        res = add_update_member(st.session_state['guild_id'], new_name, new_cp, new_job)
-                        st.success(f"{new_name} {res}!")
-                        time.sleep(1)
-                        st.rerun()
+                        # role 값이 "(선택 안 함)"이면 빈 값으로 처리하거나 "일반"으로 처리됨
+                        success, msg = add_update_member(st.session_state['guild_id'], new_name, new_cp, new_role)
+                        
+                        if success:
+                            st.success(f"{new_name} {msg}!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(msg) # 정원 초과 메시지 출력
                     else:
                         st.error("닉네임을 입력하세요.")
 
         # 2. 데이터 에디터 (빠른 수정)
         st.subheader("멤버 목록 (수정 가능)")
-        st.info("💡 표의 데이터를 더블 클릭하여 직접 수정할 수 있습니다.")
         
-        # 편집 가능한 데이터프레임
+        # 표시할 컬럼 정리 (job -> role)
+        # 데이터가 없을 때를 대비해 컬럼 확인
+        if 'role' not in df.columns:
+            df['role'] = '일반' # 기존 데이터 호환성
+            
         edited_df = st.data_editor(
-            df[['name', 'cp', 'job', 'id']], # id는 숨기거나 식별용으로 사용
+            df[['name', 'cp', 'role', 'id']], 
             column_config={
+                "name": "닉네임",
                 "cp": st.column_config.NumberColumn("전투력", format="%d"),
-                "id": st.column_config.TextColumn("ID (시스템용)", disabled=True) # 수정 불가
+                "role": st.column_config.SelectboxColumn(
+                    "직책",
+                    options=["길드장", "부길드장", "정예", "일반"],
+                    required=False
+                ),
+                "id": st.column_config.TextColumn("ID (시스템용)", disabled=True)
             },
             num_rows="dynamic",
             key="member_editor"
         )
-
-        # 변경사항 감지 및 업데이트 로직 (간단 구현)
-        # 실제로는 session_state의 edited_rows를 감지하여 업데이트 쿼리를 날려야 함
-        # 여기서는 개별 삭제/수정 버튼 방식을 병행하는 것이 안전
         
         st.divider()
+        # (삭제 버튼 코드는 기존과 동일하게 유지)
         st.subheader("멤버 삭제")
-        target_member = st.selectbox("삭제할 멤버 선택", df['name'].tolist())
-        if st.button("선택한 멤버 삭제"):
-            member_id = df[df['name'] == target_member]['id'].values[0]
-            delete_member(st.session_state['guild_id'], member_id)
-            st.warning(f"{target_member} 님이 삭제되었습니다.")
-            time.sleep(1)
-            st.rerun()
+        if not df.empty:
+            target_member = st.selectbox("삭제할 멤버 선택", df['name'].tolist())
+            if st.button("선택한 멤버 삭제"):
+                member_id = df[df['name'] == target_member]['id'].values[0]
+                delete_member(st.session_state['guild_id'], member_id)
+                st.warning(f"{target_member} 님이 삭제되었습니다.")
+                time.sleep(1)
+                st.rerun()
 
     # --- TAB 3: OCR 투력 스캔 ---
     with tab3:
