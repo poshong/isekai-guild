@@ -89,35 +89,40 @@ def run_ocr_scan(image_file):
     try:
         reader = load_ocr_reader()
         image_bytes = image_file.read()
+        # detail=0 은 글자만 리스트로 줍니다.
         result = reader.readtext(image_bytes, detail=0)
         
-        # 1. 기부 명단 분석 모드인지 확인 (키워드: '기부')
+        # 리스트를 하나의 긴 문자열로 합칩니다.
         full_text = " ".join(result)
         
-        if "기부" in full_text and "님이" in full_text:
-            # 기부 데이터 저장소: { '닉네임': {'basic': 0, 'inter': 0, ...} }
+        # [디버깅용] 실제로 OCR이 뭘 읽었는지 화면에 몰래 출력해봅니다 (나중에 주석 처리 가능)
+        st.write(f"OCR 인식 결과: {full_text}") 
+
+        # ---------------------------------------------------------
+        # 1. 기부 명단 분석 모드 (키워드 보강: '내역', '진행')
+        # ---------------------------------------------------------
+        if ("기부" in full_text and "님이" in full_text) or "길드 내역" in full_text or "진행했습니다" in full_text:
+            
             donation_counts = {}
             
-            # 한 줄씩 읽으면서 분석
             for line in result:
-                if "님이" in line and "기부" in line:
-                    # 닉네임 추출 ( '님이' 앞의 단어 )
+                # 한 줄에 '님이'와 '기부' 또는 '진행'이 같이 있어야 유효한 줄로 인정
+                if "님이" in line and ("기부" in line or "진행" in line):
                     parts = line.split("님이")
                     if len(parts) > 0:
-                        # 앞부분에서 마지막 단어가 닉네임일 확률이 높음 (시간 00:03 등 제외)
                         name_part = parts[0].strip()
                         name_tokens = name_part.split()
+                        # 보통 시간(00:06) 뒤에 닉네임이 옴. 가장 뒤에 있는 단어를 닉네임으로 추정
                         detected_name = name_tokens[-1] if name_tokens else ""
                         
-                        if not detected_name: continue
+                        # 닉네임이 너무 짧거나 숫자로만 되어있으면 제외
+                        if not detected_name or detected_name.isdigit(): continue
 
                         if detected_name not in donation_counts:
                             donation_counts[detected_name] = {'basic':0, 'inter':0, 'adv':0, 'item':0}
                         
-                        # 기부 종류 판별 (횟수 누적)
-                        # 보통 로그는 "1회"씩 찍히므로 1씩 더함. (4회 라고 적힌 경우 등은 추가 로직 필요하나 일단 1회 기준)
+                        # 횟수 추출 (기본 1회)
                         add_val = 1
-                        # 만약 "4회" 같은 텍스트가 있으면 추출 시도
                         import re
                         count_match = re.search(r'(\d+)회', line)
                         if count_match:
@@ -130,27 +135,41 @@ def run_ocr_scan(image_file):
             
             return "donation", donation_counts, "기부 내역 분석 완료"
 
-        else:
-            # 2. 현자 도전 (기존 로직)
+        # ---------------------------------------------------------
+        # 2. 현자 도전 (키워드 필수 체크로 변경!)
+        # ---------------------------------------------------------
+        # 이제는 '현자', '도전', '피해', '보상' 중 하나라도 있어야만 실행합니다.
+        elif "현자" in full_text or "도전" in full_text or "피해" in full_text or "보상" in full_text:
             found_dmg = 0.0
             found_kill = 0
             
             import re
+            # 숫자.숫자 형태를 찾음
             numbers = re.findall(r"[\d]+[.,]?[\d]*", full_text)
             
             for num in numbers:
                 clean_num = num.replace(',', '')
                 try:
                     val = float(clean_num)
-                    if val > found_dmg and '.' in num: found_dmg = val
+                    # 피해량은 보통 소수점이 있고 숫자가 큼 (단, 상단 골드바 40.2경 같은거 제외 로직 필요하지만 일단 유지)
+                    # 현자 도전 화면에는 보통 큰 숫자가 피해량 외엔 별로 없음
+                    if val > found_dmg and ('.' in num or val > 1000): found_dmg = val
+                    # 처치 수는 정수이고 100 이하
                     if val > found_kill and '.' not in num and val < 100: found_kill = int(val)
                 except: continue
                     
             return "sage", {"dmg": found_dmg, "kill": found_kill}, "현자 도전 분석 완료"
             
+        # ---------------------------------------------------------
+        # 3. 아무것도 아닌 경우
+        # ---------------------------------------------------------
+        else:
+            return "error", {}, "알 수 없는 스크린샷입니다. ('길드 내역' 또는 '현자 도전' 화면을 올려주세요)"
+            
     except Exception as e:
         return "error", {}, f"오류 발생: {e}"
-
+    
+    
 def add_update_member(guild_id, name, cp, role, doc_id=None):
     # 1. 현재 길드원 목록을 가져와서 인원 수 체크
     current_members = get_guild_members(guild_id)
