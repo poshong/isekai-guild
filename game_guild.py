@@ -82,7 +82,8 @@ def get_guild_members(guild_id):
 @st.cache_resource
 def load_ocr_reader():
     import easyocr
-    return easyocr.Reader(['ko', 'en']) 
+    # gpu=False를 넣어야 메모리 부족 에러(Oh no)가 안 뜹니다.
+    return easyocr.Reader(['ko', 'en'], gpu=False)
 
 def run_ocr_scan(image_file):
     try:
@@ -440,7 +441,7 @@ def main_app():
                         st.rerun()
         else:
             st.info("등록된 길드원이 없습니다. 위에서 등록해주세요.")
-            
+
 # --- TAB 3: 일일 숙제 & 분석 (수정된 버전) ---
     with tab3:
         st.header("📝 일일 활동 기록")
