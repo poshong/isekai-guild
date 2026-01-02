@@ -472,54 +472,44 @@ def main_app():
         if 'scan_data' not in st.session_state: st.session_state['scan_data'] = {}
         if 'scan_mode' not in st.session_state: st.session_state['scan_mode'] = None
         
-        # -----------------------------------------------------------
-        # [수정된 UI] 탭으로 분리하여 오류 방지
-        # -----------------------------------------------------------
+        # [지운 자리에 그대로 붙여넣으세요]
+    # 날짜 선택 옆(오른쪽) 공간에 업로드 기능을 넣습니다.
+    with col_upload:
         st.info("👇 스크린샷 종류에 맞는 탭을 선택해주세요.")
-    
-        # 탭을 2개로 나눕니다
-        tab_don, tab_sage = st.tabs(["💰 기부 내역 인증", "🔥 현자 도전 인증"])
+        
+        # 여기서 작은 탭 2개를 또 만듭니다.
+        sub_tab1, sub_tab2 = st.tabs(["💰 기부 내역", "🔥 현자 도전"])
 
-        # --- [탭 1] 기부 내역 처리 ---
-        with tab_don:
-            uploaded_donation = st.file_uploader("기부 스크린샷 업로드", type=['png', 'jpg', 'jpeg'], key="up_donation")
+        # [작은 탭 1] 기부 내역 올리는 곳
+        with sub_tab1:
+            uploaded_don = st.file_uploader("기부 스샷", type=['png', 'jpg'], key="up_don")
+            if uploaded_don and st.button("기부 분석", key="btn_don", type="primary"):
+                with st.spinner("분석 중..."):
+                    # [주의] 함수를 꼭! 수정해야 이 코드가 작동합니다.
+                    rtype, rdata, rmsg = run_ocr_scan(uploaded_don, "donation")
+                    
+                    if rtype == "donation":
+                        st.success(f"성공! {len(rdata)}명 발견")
+                        st.json(rdata)
+                        st.session_state['scan_mode'] = 'donation'
+                        st.session_state['scan_data'] = rdata
+                    else:
+                        st.error(rmsg)
 
-            if uploaded_donation is not None:
-                if st.button("기부 내역 분석하기", key="btn_ocr_don", type="primary"):
-                    with st.spinner("기부 내역을 읽고 있습니다..."):
-                        # 모드를 'donation'으로 지정
-                        rtype, rdata, rmsg = run_ocr_scan(uploaded_donation, "donation")
-
-                        if rtype == "donation":
-                            st.success(f"분석 성공! ({len(rdata)}명 발견)")
-                            st.json(rdata) # 결과 미리보기
-
-                            # (중요) 세션 상태에 저장해서 DB 저장 버튼과 연동
-                            st.session_state['scan_mode'] = 'donation'
-                            st.session_state['scan_data'] = rdata
-                        elif rtype == "error":
-                            st.error(rmsg)
-
-        # --- [탭 2] 현자 도전 처리 ---
-        with tab_sage:
-            uploaded_sage = st.file_uploader("현자 스크린샷 업로드", type=['png', 'jpg', 'jpeg'], key="up_sage")
-
-            if uploaded_sage is not None:
-                if st.button("현자 기록 분석하기", key="btn_ocr_sage", type="primary"):
-                    with st.spinner("현자 기록을 읽고 있습니다..."):
-                        # 모드를 'sage'로 지정
-                        rtype, rdata, rmsg = run_ocr_scan(uploaded_sage, "sage")
-
-                        if rtype == "sage":
-                            st.success("분석 성공!")
-                            st.write(f"⚔️ 피해량: {rdata['dmg']}")
-                            st.write(f"💀 처치 수: {rdata['kill']}")
-
-                            # (중요) 세션 상태에 저장
-                            st.session_state['scan_mode'] = 'sage'
-                            st.session_state['scan_data'] = rdata
-                        elif rtype == "error":
-                            st.error(rmsg)
+        # [작은 탭 2] 현자 도전 올리는 곳
+        with sub_tab2:
+            uploaded_sage = st.file_uploader("현자 스샷", type=['png', 'jpg'], key="up_sage")
+            if uploaded_sage and st.button("현자 분석", key="btn_sage", type="primary"):
+                with st.spinner("분석 중..."):
+                    rtype, rdata, rmsg = run_ocr_scan(uploaded_sage, "sage")
+                    
+                    if rtype == "sage":
+                        st.success(f"피해량: {rdata['dmg']}")
+                        st.session_state['scan_mode'] = 'sage'
+                        st.session_state['scan_data'] = rdata
+                    else:
+                        st.error(rmsg)
+                        
 
         # 1. 데이터 입력 표 (Data Editor)
         members_df = get_guild_members(st.session_state['guild_id'])
