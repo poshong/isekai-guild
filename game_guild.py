@@ -78,65 +78,72 @@ def get_guild_members(guild_id):
         data.append(d)
     return pd.DataFrame(data)
 
-# --- 헬퍼 함수: OCR 분석 (스마트 버전) ---
-@st.cache_resource
-def load_ocr_reader():
-    import easyocr
-    # gpu=False를 넣어야 메모리 부족 에러(Oh no)가 안 뜹니다.
-    return easyocr.Reader(['ko', 'en'], gpu=False)
 
-# --- 헬퍼 함수: OCR 분석 (모드 선택형) ---
+
+# --- 헬퍼 함수: OCR 분석 (스마트 패턴 매칭 버전) ---
 @st.cache_resource
 def load_ocr_reader():
     import easyocr
     return easyocr.Reader(['ko', 'en'], gpu=False) 
 
-# scan_mode: "donation" 또는 "sage"
 def run_ocr_scan(image_file, scan_mode):
     try:
         reader = load_ocr_reader()
         image_bytes = image_file.read()
+        
+        # detail=0은 글자만 리스트로 줍니다.
         result = reader.readtext(image_bytes, detail=0)
+        
+        # [핵심 변경] 리스트를 공백으로 이어 붙여서 '하나의 긴 글'로 만듭니다.
         full_text = " ".join(result)
         
-        # [디버깅] 인식된 글자 확인용 (나중에 주석 처리 가능)
-        # st.write(f"[{scan_mode}] OCR Raw Text: {full_text}")
+        # 디버깅을 위해 화면에 인식된 글자를 몰래 보여줍니다 (문제 해결 후 주석 처리 가능)
+        st.write("🔍 [OCR 인식 결과]:", full_text)
 
         # ---------------------------------------------------------
         # MODE 1: 기부 내역 분석
         # ---------------------------------------------------------
         if scan_mode == "donation":
             donation_counts = {}
-            # 한 줄씩 읽으면서 분석
-            for line in result:
-                # 기부 로직: '님이' + ('기부' or '진행') 키워드가 있어야 함
-                if "님이" in line and ("기부" in line or "진행" in line):
-                    parts = line.split("님이")
-                    if len(parts) > 0:
-                        name_part = parts[0].strip()
-                        name_tokens = name_part.split()
-                        detected_name = name_tokens[-1] if name_tokens else ""
-                        
-                        if not detected_name or detected_name.isdigit(): continue
-
-                        if detected_name not in donation_counts:
-                            donation_counts[detected_name] = {'basic':0, 'inter':0, 'adv':0, 'item':0}
-                        
-                        add_val = 1
-                        import re
-                        count_match = re.search(r'(\d+)회', line)
-                        if count_match:
-                            add_val = int(count_match.group(1))
-
-                        if "초급" in line: donation_counts[detected_name]['basic'] += add_val
-                        elif "중급" in line: donation_counts[detected_name]['inter'] += add_val
-                        elif "고급" in line: donation_counts[detected_name]['adv'] += add_val
-                        elif "아이템" in line: donation_counts[detected_name]['item'] += add_val
+            import re
             
-            # 결과가 하나도 없으면 경고
-            if not donation_counts:
+            # 정규표현식: "(닉네임) 님이 (무슨) 기부를" 패턴을 찾습니다.
+            # \s* 는 띄어쓰기가 있든 없든 상관없다는 뜻입니다.
+            pattern = re.compile(r'(\S+)\s*님이\s*(\S+)\s*기부')
+            
+            # 긴 글에서 패턴에 맞는 모든 부분을 찾습니다.
+            matches = pattern.findall(full_text)
+            
+            if not matches:
+                # "기부"나 "님이"가 있는데 인식을 못 한 건지, 아예 엉뚱한 사진인지 확인
+                if "기부" in full_text:
+                     return "error", {}, "기부 글자는 보이지만 패턴을 못 찾았습니다. 인식 결과를 확인해주세요."
                 return "error", {}, "기부 내역을 찾지 못했습니다. 올바른 스크린샷인지 확인해주세요."
+
+            for match in matches:
+                # match[0]: 닉네임, match[1]: 기부 종류(초급/중급/고급 등)
+                raw_name = match[0]
+                donation_type = match[1]
                 
+                # 닉네임 정제 (혹시 앞에 이상한 기호가 붙었으면 제거)
+                nickname = raw_name.strip()
+                
+                # 가끔 시간(00:02)이 닉네임으로 잡히는 경우 제외
+                if ":" in nickname or nickname.isdigit():
+                    continue
+
+                if nickname not in donation_counts:
+                    donation_counts[nickname] = {'basic':0, 'inter':0, 'adv':0, 'item':0}
+                
+                # 횟수는 기본 1회로 가정 (스크린샷에 보통 1회씩 나오므로)
+                # 만약 "4회" 같은 걸 인식하려면 더 복잡해지지만, 일단 기본 로직 적용
+                add_val = 1
+                
+                if "초급" in donation_type: donation_counts[nickname]['basic'] += add_val
+                elif "중급" in donation_type: donation_counts[nickname]['inter'] += add_val
+                elif "고급" in donation_type: donation_counts[nickname]['adv'] += add_val
+                elif "아이템" in donation_type: donation_counts[nickname]['item'] += add_val
+            
             return "donation", donation_counts, "기부 내역 분석 완료"
 
         # ---------------------------------------------------------
@@ -146,6 +153,7 @@ def run_ocr_scan(image_file, scan_mode):
             found_dmg = 0.0
             found_kill = 0
             
+            # 현자 로직은 숫자 찾기 (기존 유지)
             import re
             numbers = re.findall(r"[\d]+[.,]?[\d]*", full_text)
             
@@ -153,20 +161,19 @@ def run_ocr_scan(image_file, scan_mode):
                 clean_num = num.replace(',', '')
                 try:
                     val = float(clean_num)
-                    # 피해량 로직: 소수점이 포함되어 있거나, 숫자가 매우 큰 경우
+                    # 40.2억 -> 40.2로 인식됨. 현자 피해량은 보통 소수점 포함
                     if val > found_dmg and ('.' in num or val > 1000): found_dmg = val
-                    # 처치 수 로직: 소수점 없고 100 미만
                     if val > found_kill and '.' not in num and val < 100: found_kill = int(val)
                 except: continue
             
-            # 현자 데이터가 너무 터무니 없으면(0이면) 경고
             if found_dmg == 0:
-                 return "error", {}, "피해량을 인식하지 못했습니다. 스크린샷을 확인해주세요."
+                 return "error", {}, "피해량을 찾지 못했습니다. 인식 결과를 확인해주세요."
 
             return "sage", {"dmg": found_dmg, "kill": found_kill}, "현자 도전 분석 완료"
             
     except Exception as e:
         return "error", {}, f"오류 발생: {e}"
+    
     
     
 def add_update_member(guild_id, name, cp, role, doc_id=None):
@@ -509,7 +516,7 @@ def main_app():
                         st.session_state['scan_data'] = rdata
                     else:
                         st.error(rmsg)
-                        
+
 
         # 1. 데이터 입력 표 (Data Editor)
         members_df = get_guild_members(st.session_state['guild_id'])
