@@ -85,43 +85,43 @@ def load_ocr_reader():
     # gpu=False를 넣어야 메모리 부족 에러(Oh no)가 안 뜹니다.
     return easyocr.Reader(['ko', 'en'], gpu=False)
 
-def run_ocr_scan(image_file):
+# --- 헬퍼 함수: OCR 분석 (모드 선택형) ---
+@st.cache_resource
+def load_ocr_reader():
+    import easyocr
+    return easyocr.Reader(['ko', 'en'], gpu=False) 
+
+# scan_mode: "donation" 또는 "sage"
+def run_ocr_scan(image_file, scan_mode):
     try:
         reader = load_ocr_reader()
         image_bytes = image_file.read()
-        # detail=0 은 글자만 리스트로 줍니다.
         result = reader.readtext(image_bytes, detail=0)
-        
-        # 리스트를 하나의 긴 문자열로 합칩니다.
         full_text = " ".join(result)
         
-        # [디버깅용] 실제로 OCR이 뭘 읽었는지 화면에 몰래 출력해봅니다 (나중에 주석 처리 가능)
-        st.write(f"OCR 인식 결과: {full_text}") 
+        # [디버깅] 인식된 글자 확인용 (나중에 주석 처리 가능)
+        # st.write(f"[{scan_mode}] OCR Raw Text: {full_text}")
 
         # ---------------------------------------------------------
-        # 1. 기부 명단 분석 모드 (키워드 보강: '내역', '진행')
+        # MODE 1: 기부 내역 분석
         # ---------------------------------------------------------
-        if ("기부" in full_text and "님이" in full_text) or "길드 내역" in full_text or "진행했습니다" in full_text:
-            
+        if scan_mode == "donation":
             donation_counts = {}
-            
+            # 한 줄씩 읽으면서 분석
             for line in result:
-                # 한 줄에 '님이'와 '기부' 또는 '진행'이 같이 있어야 유효한 줄로 인정
+                # 기부 로직: '님이' + ('기부' or '진행') 키워드가 있어야 함
                 if "님이" in line and ("기부" in line or "진행" in line):
                     parts = line.split("님이")
                     if len(parts) > 0:
                         name_part = parts[0].strip()
                         name_tokens = name_part.split()
-                        # 보통 시간(00:06) 뒤에 닉네임이 옴. 가장 뒤에 있는 단어를 닉네임으로 추정
                         detected_name = name_tokens[-1] if name_tokens else ""
                         
-                        # 닉네임이 너무 짧거나 숫자로만 되어있으면 제외
                         if not detected_name or detected_name.isdigit(): continue
 
                         if detected_name not in donation_counts:
                             donation_counts[detected_name] = {'basic':0, 'inter':0, 'adv':0, 'item':0}
                         
-                        # 횟수 추출 (기본 1회)
                         add_val = 1
                         import re
                         count_match = re.search(r'(\d+)회', line)
@@ -133,38 +133,37 @@ def run_ocr_scan(image_file):
                         elif "고급" in line: donation_counts[detected_name]['adv'] += add_val
                         elif "아이템" in line: donation_counts[detected_name]['item'] += add_val
             
+            # 결과가 하나도 없으면 경고
+            if not donation_counts:
+                return "error", {}, "기부 내역을 찾지 못했습니다. 올바른 스크린샷인지 확인해주세요."
+                
             return "donation", donation_counts, "기부 내역 분석 완료"
 
         # ---------------------------------------------------------
-        # 2. 현자 도전 (키워드 필수 체크로 변경!)
+        # MODE 2: 현자 도전 분석
         # ---------------------------------------------------------
-        # 이제는 '현자', '도전', '피해', '보상' 중 하나라도 있어야만 실행합니다.
-        elif "현자" in full_text or "도전" in full_text or "피해" in full_text or "보상" in full_text:
+        elif scan_mode == "sage":
             found_dmg = 0.0
             found_kill = 0
             
             import re
-            # 숫자.숫자 형태를 찾음
             numbers = re.findall(r"[\d]+[.,]?[\d]*", full_text)
             
             for num in numbers:
                 clean_num = num.replace(',', '')
                 try:
                     val = float(clean_num)
-                    # 피해량은 보통 소수점이 있고 숫자가 큼 (단, 상단 골드바 40.2경 같은거 제외 로직 필요하지만 일단 유지)
-                    # 현자 도전 화면에는 보통 큰 숫자가 피해량 외엔 별로 없음
+                    # 피해량 로직: 소수점이 포함되어 있거나, 숫자가 매우 큰 경우
                     if val > found_dmg and ('.' in num or val > 1000): found_dmg = val
-                    # 처치 수는 정수이고 100 이하
+                    # 처치 수 로직: 소수점 없고 100 미만
                     if val > found_kill and '.' not in num and val < 100: found_kill = int(val)
                 except: continue
-                    
-            return "sage", {"dmg": found_dmg, "kill": found_kill}, "현자 도전 분석 완료"
             
-        # ---------------------------------------------------------
-        # 3. 아무것도 아닌 경우
-        # ---------------------------------------------------------
-        else:
-            return "error", {}, "알 수 없는 스크린샷입니다. ('길드 내역' 또는 '현자 도전' 화면을 올려주세요)"
+            # 현자 데이터가 너무 터무니 없으면(0이면) 경고
+            if found_dmg == 0:
+                 return "error", {}, "피해량을 인식하지 못했습니다. 스크린샷을 확인해주세요."
+
+            return "sage", {"dmg": found_dmg, "kill": found_kill}, "현자 도전 분석 완료"
             
     except Exception as e:
         return "error", {}, f"오류 발생: {e}"
@@ -473,38 +472,64 @@ def main_app():
         if 'scan_data' not in st.session_state: st.session_state['scan_data'] = {}
         if 'scan_mode' not in st.session_state: st.session_state['scan_mode'] = None
         
-        with col_upload:
-            uploaded_file = st.file_uploader("📸 스크린샷 (기부로그 / 현자도전)", type=['png', 'jpg', 'jpeg'])
-            
-            if uploaded_file:
-                if st.button("🔍 스크린샷 스마트 분석", type="primary"):
-                    with st.spinner("이미지를 분석 중입니다..."):
-                        mode, result_data, msg = run_ocr_scan(uploaded_file)
-                        st.session_state['scan_mode'] = mode
-                        st.session_state['scan_data'] = result_data
-                        
-                        if mode == "donation":
-                            st.success(f"📜 기부 명단 인식 성공! ({len(result_data)}명 감지)")
-                        elif mode == "sage":
-                            st.success(f"🔥 현자 도전 인식 성공! (피해량: {result_data['dmg']}억)")
-                        else:
-                            st.error(msg)
-                        uploaded_file.seek(0)
+        # -----------------------------------------------------------
+        # [수정된 UI] 탭으로 분리하여 오류 방지
+        # -----------------------------------------------------------
+        st.info("👇 스크린샷 종류에 맞는 탭을 선택해주세요.")
+    
+        # 탭을 2개로 나눕니다
+        tab_don, tab_sage = st.tabs(["💰 기부 내역 인증", "🔥 현자 도전 인증"])
 
-        st.divider()
+        # --- [탭 1] 기부 내역 처리 ---
+        with tab_don:
+            uploaded_donation = st.file_uploader("기부 스크린샷 업로드", type=['png', 'jpg', 'jpeg'], key="up_donation")
+
+            if uploaded_donation is not None:
+                if st.button("기부 내역 분석하기", key="btn_ocr_don", type="primary"):
+                    with st.spinner("기부 내역을 읽고 있습니다..."):
+                        # 모드를 'donation'으로 지정
+                        rtype, rdata, rmsg = run_ocr_scan(uploaded_donation, "donation")
+
+                        if rtype == "donation":
+                            st.success(f"분석 성공! ({len(rdata)}명 발견)")
+                            st.json(rdata) # 결과 미리보기
+
+                            # (중요) 세션 상태에 저장해서 DB 저장 버튼과 연동
+                            st.session_state['scan_mode'] = 'donation'
+                            st.session_state['scan_data'] = rdata
+                        elif rtype == "error":
+                            st.error(rmsg)
+
+        # --- [탭 2] 현자 도전 처리 ---
+        with tab_sage:
+            uploaded_sage = st.file_uploader("현자 스크린샷 업로드", type=['png', 'jpg', 'jpeg'], key="up_sage")
+
+            if uploaded_sage is not None:
+                if st.button("현자 기록 분석하기", key="btn_ocr_sage", type="primary"):
+                    with st.spinner("현자 기록을 읽고 있습니다..."):
+                        # 모드를 'sage'로 지정
+                        rtype, rdata, rmsg = run_ocr_scan(uploaded_sage, "sage")
+
+                        if rtype == "sage":
+                            st.success("분석 성공!")
+                            st.write(f"⚔️ 피해량: {rdata['dmg']}")
+                            st.write(f"💀 처치 수: {rdata['kill']}")
+
+                            # (중요) 세션 상태에 저장
+                            st.session_state['scan_mode'] = 'sage'
+                            st.session_state['scan_data'] = rdata
+                        elif rtype == "error":
+                            st.error(rmsg)
 
         # 1. 데이터 입력 표 (Data Editor)
         members_df = get_guild_members(st.session_state['guild_id'])
-        
         if members_df.empty:
             st.warning("먼저 [멤버 관리] 탭에서 길드원을 등록해주세요.")
         else:
             daily_record = get_daily_data(st.session_state['guild_id'], date_str)
-            
             # 스캔 데이터 준비
             scanned = st.session_state['scan_data']
             mode = st.session_state['scan_mode']
-            
             display_data = []
             for index, row in members_df.iterrows():
                 mem_id = row['id']
