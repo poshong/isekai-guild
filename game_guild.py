@@ -26,39 +26,46 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 하이브리드 Firebase 초기화 (핵심 기능) ---
+
+
+# --- 2. 하이브리드 Firebase 초기화 (수정된 버전) ---
 @st.cache_resource
 def init_firestore():
     """
-    로컬(json)과 클라우드(secrets) 환경을 모두 지원하는 하이브리드 초기화 함수
+    Secrets와 로컬 JSON을 모두 지원하는 강력한 초기화 함수
     """
     try:
-        if not firebase_admin._apps:  # 앱이 초기화되지 않은 경우에만 실행
-            try:
-                # 1순위: Streamlit Cloud Secrets 확인
-                if "firebase" in st.secrets:
-                    # secrets.toml의 정보를 dict로 변환
-                    firebase_info = dict(st.secrets["firebase"])
-                    cred = credentials.Certificate(firebase_info)
-                    print("✅ Streamlit Cloud Secrets로 인증 성공")
-                
-                # 2순위: 로컬 JSON 파일 확인
-                else:
-                    cred = credentials.Certificate("serviceAccountKey.json")
-                    print("✅ 로컬 JSON 파일로 인증 성공")
-                
+        import firebase_admin
+        from firebase_admin import credentials, firestore
+        
+        if not firebase_admin._apps: 
+            # 1순위: Streamlit Secrets에서 'gcp_service_account' 찾기
+            # (아까 우리가 secrets에 이 이름으로 저장했으니까요!)
+            if "gcp_service_account" in st.secrets:
+                key_dict = dict(st.secrets["gcp_service_account"])
+                cred = credentials.Certificate(key_dict)
                 firebase_admin.initialize_app(cred)
-            except Exception as inner_e:
-                st.error(f"❌ 인증 파일 로드 실패: {inner_e}")
-                st.stop()
+                print("✅ Streamlit Secrets로 인증 성공")
+            
+            # 2순위: 혹시 'firebase'라는 이름으로 저장했을 경우 대비
+            elif "firebase" in st.secrets:
+                key_dict = dict(st.secrets["firebase"])
+                cred = credentials.Certificate(key_dict)
+                firebase_admin.initialize_app(cred)
                 
-        db = firestore.client()
-        return db
+            # 3순위: 로컬 파일 (내 컴퓨터에서 테스트할 때용)
+            else:
+                cred = credentials.Certificate("serviceAccountKey.json")
+                firebase_admin.initialize_app(cred)
+                print("✅ 로컬 JSON 파일로 인증 성공")
+                
+        return firestore.client()
+        
     except Exception as e:
         st.error(f"🔥 Firebase 연결 오류: {e}")
         st.stop()
 
-db = init_firestore()
+
 
 # --- 3. 세션 상태 관리 ---
 if 'is_logged_in' not in st.session_state:
@@ -178,7 +185,7 @@ def run_ocr_scan(image_file, scan_mode):
     
     
 
-    
+
 def add_update_member(guild_id, name, cp, role, doc_id=None):
     # 1. 현재 길드원 목록을 가져와서 인원 수 체크
     current_members = get_guild_members(guild_id)
