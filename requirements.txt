@@ -5,5 +5,5 @@ pillow
 firebase-admin
 plotly
 bcrypt
-easyocr
 opencv-python-headless
+google-cloud-vision

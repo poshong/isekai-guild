@@ -80,65 +80,66 @@ def get_guild_members(guild_id):
 
 
 
-# --- 헬퍼 함수: OCR 분석 (스마트 패턴 매칭 버전) ---
+# --- 헬퍼 함수: 구글 Vision AI 분석 ---
 @st.cache_resource
-def load_ocr_reader():
-    import easyocr
-    return easyocr.Reader(['ko', 'en'], gpu=False) 
+def get_vision_client():
+    from google.cloud import vision
+    from google.oauth2 import service_account
+    import json
+
+    # Streamlit Secrets에서 키 가져오기
+    key_dict = st.secrets["gcp_service_account"]
+    # 딕셔너리를 이용해 인증 객체 생성
+    creds = service_account.Credentials.from_service_account_info(key_dict)
+    client = vision.ImageAnnotatorClient(credentials=creds)
+    return client
 
 def run_ocr_scan(image_file, scan_mode):
     try:
-        reader = load_ocr_reader()
-        image_bytes = image_file.read()
+        from google.cloud import vision
+        client = get_vision_client()
         
-        # detail=0은 글자만 리스트로 줍니다.
-        result = reader.readtext(image_bytes, detail=0)
+        content = image_file.read()
+        image = vision.Image(content=content)
+
+        # 구글 AI에게 "글자 다 읽어와!" 명령
+        response = client.text_detection(image=image)
+        texts = response.text_annotations
         
-        # [핵심 변경] 리스트를 공백으로 이어 붙여서 '하나의 긴 글'로 만듭니다.
-        full_text = " ".join(result)
+        if not texts:
+            return "error", {}, "글자를 전혀 찾지 못했습니다."
+
+        # 구글은 첫 번째 결과(texts[0])에 전체 문장을 아주 깔끔하게 줍니다.
+        full_text = texts[0].description
         
-        # 디버깅을 위해 화면에 인식된 글자를 몰래 보여줍니다 (문제 해결 후 주석 처리 가능)
-        st.write("🔍 [OCR 인식 결과]:", full_text)
+        # [디버깅] 구글이 읽은 값 확인
+        st.write("🔍 [Google Vision 인식 결과]:", full_text)
 
         # ---------------------------------------------------------
-        # MODE 1: 기부 내역 분석
+        # MODE 1: 기부 내역 분석 (로직은 아까와 동일하지만, 데이터 품질이 최상급)
         # ---------------------------------------------------------
         if scan_mode == "donation":
             donation_counts = {}
             import re
             
-            # 정규표현식: "(닉네임) 님이 (무슨) 기부를" 패턴을 찾습니다.
-            # \s* 는 띄어쓰기가 있든 없든 상관없다는 뜻입니다.
+            # 패턴: (닉네임) 님이 (무슨) 기부
             pattern = re.compile(r'(\S+)\s*님이\s*(\S+)\s*기부')
-            
-            # 긴 글에서 패턴에 맞는 모든 부분을 찾습니다.
             matches = pattern.findall(full_text)
             
             if not matches:
-                # "기부"나 "님이"가 있는데 인식을 못 한 건지, 아예 엉뚱한 사진인지 확인
-                if "기부" in full_text:
-                     return "error", {}, "기부 글자는 보이지만 패턴을 못 찾았습니다. 인식 결과를 확인해주세요."
-                return "error", {}, "기부 내역을 찾지 못했습니다. 올바른 스크린샷인지 확인해주세요."
+                return "error", {}, "기부 내역 패턴을 찾지 못했습니다."
 
             for match in matches:
-                # match[0]: 닉네임, match[1]: 기부 종류(초급/중급/고급 등)
                 raw_name = match[0]
                 donation_type = match[1]
-                
-                # 닉네임 정제 (혹시 앞에 이상한 기호가 붙었으면 제거)
                 nickname = raw_name.strip()
                 
-                # 가끔 시간(00:02)이 닉네임으로 잡히는 경우 제외
-                if ":" in nickname or nickname.isdigit():
-                    continue
+                if ":" in nickname or nickname.isdigit(): continue
 
                 if nickname not in donation_counts:
                     donation_counts[nickname] = {'basic':0, 'inter':0, 'adv':0, 'item':0}
                 
-                # 횟수는 기본 1회로 가정 (스크린샷에 보통 1회씩 나오므로)
-                # 만약 "4회" 같은 걸 인식하려면 더 복잡해지지만, 일단 기본 로직 적용
                 add_val = 1
-                
                 if "초급" in donation_type: donation_counts[nickname]['basic'] += add_val
                 elif "중급" in donation_type: donation_counts[nickname]['inter'] += add_val
                 elif "고급" in donation_type: donation_counts[nickname]['adv'] += add_val
@@ -153,28 +154,30 @@ def run_ocr_scan(image_file, scan_mode):
             found_dmg = 0.0
             found_kill = 0
             
-            # 현자 로직은 숫자 찾기 (기존 유지)
             import re
+            # 숫자 추출
             numbers = re.findall(r"[\d]+[.,]?[\d]*", full_text)
             
             for num in numbers:
                 clean_num = num.replace(',', '')
                 try:
                     val = float(clean_num)
-                    # 40.2억 -> 40.2로 인식됨. 현자 피해량은 보통 소수점 포함
+                    # 피해량 (소수점 있거나 큼)
                     if val > found_dmg and ('.' in num or val > 1000): found_dmg = val
+                    # 처치수 (100 미만 정수)
                     if val > found_kill and '.' not in num and val < 100: found_kill = int(val)
                 except: continue
             
             if found_dmg == 0:
-                 return "error", {}, "피해량을 찾지 못했습니다. 인식 결과를 확인해주세요."
+                 return "error", {}, "피해량을 찾지 못했습니다."
 
             return "sage", {"dmg": found_dmg, "kill": found_kill}, "현자 도전 분석 완료"
             
     except Exception as e:
-        return "error", {}, f"오류 발생: {e}"
+        return "error", {}, f"구글 AI 연동 오류: {e}"
     
     
+
     
 def add_update_member(guild_id, name, cp, role, doc_id=None):
     # 1. 현재 길드원 목록을 가져와서 인원 수 체크
