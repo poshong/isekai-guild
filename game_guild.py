@@ -6,7 +6,6 @@ import plotly.express as px
 import json
 import time
 from datetime import datetime, timedelta
-import easyocr
 import re
 
 # --- 1. 페이지 설정 및 디자인 ---
