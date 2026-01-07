@@ -65,6 +65,10 @@ def init_firestore():
         st.stop()
 
 
+db = init_firestore()
+
+
+
 # --- 3. 세션 상태 관리 ---
 if 'is_logged_in' not in st.session_state:
     st.session_state['is_logged_in'] = False
