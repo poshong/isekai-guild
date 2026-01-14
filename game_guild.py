@@ -7,20 +7,11 @@ import json
 import time
 from datetime import datetime, timedelta
 import re
-import bcrypt
 
 
 
 
-# 👇 [이 코드를 잠시 추가하세요] --------------------------------
-# 임시: 0717 비밀번호를 암호화해서 화면에 보여주는 코드
-temp_password = "0717"
-hashed_pw = bcrypt.hashpw(temp_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-st.warning(f"🔑 [복사용 암호코드] : {hashed_pw}")
-# 👆 --------------------------------------------------------
-
-# ... (그 아래에는 원래 코드들이 계속 이어집니다)
 
 
 
@@ -517,35 +508,73 @@ def main_app():
         # 여기서 작은 탭 2개를 또 만듭니다.
         sub_tab1, sub_tab2 = st.tabs(["💰 기부 내역", "🔥 현자 도전"])
 
+
+
         # [작은 탭 1] 기부 내역 올리는 곳
         with sub_tab1:
-            uploaded_don = st.file_uploader("기부 스샷", type=['png', 'jpg'], key="up_don")
-            if uploaded_don and st.button("기부 분석", key="btn_don", type="primary"):
-                with st.spinner("분석 중..."):
-                    # [주의] 함수를 꼭! 수정해야 이 코드가 작동합니다.
-                    rtype, rdata, rmsg = run_ocr_scan(uploaded_don, "donation")
-                    
-                    if rtype == "donation":
-                        st.success(f"성공! {len(rdata)}명 발견")
-                        st.json(rdata)
+            # 1. accept_multiple_files=True 추가 (여러 장 선택 가능)
+            uploaded_dons = st.file_uploader("기부 스샷 (여러 장 가능)", type=['png', 'jpg'], accept_multiple_files=True, key="up_don")
+    
+            # 2. 파일이 하나라도 있고 버튼을 누르면 시작
+            if uploaded_dons and st.button("기부 분석", key="btn_don", type="primary"):
+                with st.spinner(f"스크린샷 {len(uploaded_dons)}장 분석 중..."):
+            
+                    all_donation_data = [] # 모든 결과를 모을 바구니
+                    success_count = 0
+            
+                    # 3. 반복문으로 파일 하나씩 꺼내서 분석
+                    for file in uploaded_dons:
+                        rtype, rdata, rmsg = run_ocr_scan(file, "donation")
+                
+                        if rtype == "donation":
+                            # 찾은 명단을 바구니에 추가 (extend는 리스트를 합치는 명령어)
+                            all_donation_data.extend(rdata)
+                            success_count += 1
+                        else:
+                            st.warning(f"실패한 파일이 있습니다: {rmsg}")
+
+                    # 4. 최종 결과 보여주기
+                    if success_count > 0:
+                        st.success(f"분석 완료! 총 {len(all_donation_data)}명의 데이터를 찾았습니다.")
+                        st.json(all_donation_data) # 전체 명단 보여주기
+                
+                        # 세션에 저장 (나중에 엑셀 저장 등을 위해)
                         st.session_state['scan_mode'] = 'donation'
-                        st.session_state['scan_data'] = rdata
+                        st.session_state['scan_data'] = all_donation_data
                     else:
-                        st.error(rmsg)
+                        st.error("분석된 데이터가 없습니다.")
+
+
 
         # [작은 탭 2] 현자 도전 올리는 곳
         with sub_tab2:
-            uploaded_sage = st.file_uploader("현자 스샷", type=['png', 'jpg'], key="up_sage")
-            if uploaded_sage and st.button("현자 분석", key="btn_sage", type="primary"):
-                with st.spinner("분석 중..."):
-                    rtype, rdata, rmsg = run_ocr_scan(uploaded_sage, "sage")
-                    
-                    if rtype == "sage":
-                        st.success(f"피해량: {rdata['dmg']}")
+            # 1. accept_multiple_files=True 추가
+            uploaded_sages = st.file_uploader("현자 스샷 (여러 장 가능)", type=['png', 'jpg'], accept_multiple_files=True, key="up_sage")
+    
+            if uploaded_sages and st.button("현자 분석", key="btn_sage", type="primary"):
+                with st.spinner(f"스크린샷 {len(uploaded_sages)}장 분석 중..."):
+            
+                    all_sage_data = [] # 결과를 모을 바구니
+            
+                    # 2. 반복문 시작
+                    for file in uploaded_sages:
+                        rtype, rdata, rmsg = run_ocr_scan(file, "sage")
+                
+                        if rtype == "sage":
+                            # 현자 데이터는 딕셔너리(한 명 정보)일 테니 리스트에 추가(append)
+                            all_sage_data.append(rdata)
+                        else:
+                            st.warning(f"인식 실패: {rmsg}")
+
+                    # 3. 결과 출력
+                    if all_sage_data:
+                        st.success(f"분석 완료! {len(all_sage_data)}건의 기록을 찾았습니다.")
+                        st.dataframe(all_sage_data) # 표로 깔끔하게 보여주기
+                
                         st.session_state['scan_mode'] = 'sage'
-                        st.session_state['scan_data'] = rdata
+                        st.session_state['scan_data'] = all_sage_data
                     else:
-                        st.error(rmsg)
+                        st.error("분석에 성공한 이미지가 없습니다.")
 
 
         # 1. 데이터 입력 표 (Data Editor)
