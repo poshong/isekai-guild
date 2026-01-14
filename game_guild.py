@@ -10,13 +10,6 @@ import re
 
 
 
-
-
-
-
-
-
-
 # --- 1. 페이지 설정 및 디자인 ---
 st.set_page_config(
     page_title="이세계 판타지 라이프 - 길드 매니저",
@@ -195,6 +188,32 @@ def run_ocr_scan(image_file, scan_mode):
         return "error", {}, f"구글 AI 연동 오류: {e}"
     
     
+        # 👇 [3] [추가된 부분] 투력 업데이트 모드 👇
+        elif mode == "power":
+            # 패턴: "닉네임 - 숫자억" (예: 레아 - 576.7억)
+            # 1. (글자들) -> 이름
+            # 2. (-) -> 구분자
+            # 3. (숫자와점) -> 투력
+            pattern = re.compile(r'([가-힣a-zA-Z0-9]+)\s*-\s*([\d\.]+)')
+        
+            for line in lines:
+                match = pattern.search(line)
+                if match:
+                    name = match.group(1).strip() # 이름 (예: 레아)
+                    power_val = float(match.group(2)) # 숫자 (예: 576.7)
+                
+                    data_list.append({
+                        "name": name,
+                        "power": power_val
+                    })
+        
+            if data_list:
+                return "power", data_list, None
+            else:
+                return "error", None, "투력 패턴(이름 - 숫자억)을 찾지 못했습니다."
+
+        return "error", None, "알 수 없는 모드입니다."
+
 
 
 def add_update_member(guild_id, name, cp, role, doc_id=None):
@@ -506,7 +525,7 @@ def main_app():
         st.info("👇 스크린샷 종류에 맞는 탭을 선택해주세요.")
         
         # 여기서 작은 탭 2개를 또 만듭니다.
-        sub_tab1, sub_tab2 = st.tabs(["💰 기부 내역", "🔥 현자 도전"])
+        sub_tab1, sub_tab2, sub_tab3 = st.tabs(["💰 기부 내역", "🔥 현자 도전", "⚔️ 투력 업데이트"])
 
 
 
@@ -575,6 +594,52 @@ def main_app():
                         st.session_state['scan_data'] = all_sage_data
                     else:
                         st.error("분석에 성공한 이미지가 없습니다.")
+
+        # [작은 탭 3] 투력 자동 업데이트
+        with sub_tab3:
+            st.info("📸 '이름 - 000억' 형식으로 된 리스트 사진을 올려주세요.")
+            uploaded_powers = st.file_uploader("투력 목록 스샷", type=['png', 'jpg'], accept_multiple_files=True, key="up_power")
+    
+            if uploaded_powers and st.button("투력 분석 및 저장", key="btn_power", type="primary"):
+                with st.spinner("이미지 분석 중..."):
+                    all_power_data = []
+            
+                    # 1. 이미지 분석
+                    for file in uploaded_powers:
+                        # 여기서 방금 만든 'power' 모드를 사용합니다!
+                        rtype, rdata, rmsg = run_ocr_scan(file, "power")
+                
+                        if rtype == "power":
+                            all_power_data.extend(rdata)
+            
+                    # 2. 결과가 있으면 DB에 저장
+                    if all_power_data:
+                        st.success(f"총 {len(all_power_data)}명의 투력 정보를 찾았습니다!")
+                        st.dataframe(all_power_data) # 표로 보여주기
+                
+                        # DB 업데이트 진행
+                        progress_text = "DB 저장 중..."
+                        my_bar = st.progress(0, text=progress_text)
+                
+                        guild_ref = db.collection('guilds').document(st.session_state['guild_id'])
+                
+                        for idx, member in enumerate(all_power_data):
+                            # 각 멤버의 이름으로 문서 생성 (없으면 만들고, 있으면 투력만 수정)
+                            # merge=True 옵션 덕분에 다른 정보는 안 지워지고 '투력'만 바뀝니다.
+                            guild_ref.collection('members').document(member['name']).set({
+                                'power': member['power'],
+                                'last_updated': firestore.SERVER_TIMESTAMP
+                            }, merge=True)
+                    
+                            my_bar.progress((idx + 1) / len(all_power_data))
+                
+                        st.success("✅ 모든 길드원의 투력이 최신으로 업데이트되었습니다!")
+                        time.sleep(1)
+                        st.rerun() # 새로고침해서 반영
+                
+                    else:
+                        st.warning("분석 실패: 사진에서 이름과 투력을 찾지 못했습니다.")
+
 
 
         # 1. 데이터 입력 표 (Data Editor)
