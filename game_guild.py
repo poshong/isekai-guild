@@ -7,6 +7,24 @@ import json
 import time
 from datetime import datetime, timedelta
 import re
+import bcrypt
+
+
+
+
+# 👇 [이 코드를 잠시 추가하세요] --------------------------------
+# 임시: 0717 비밀번호를 암호화해서 화면에 보여주는 코드
+temp_password = "0717"
+hashed_pw = bcrypt.hashpw(temp_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+st.warning(f"🔑 [복사용 암호코드] : {hashed_pw}")
+# 👆 --------------------------------------------------------
+
+# ... (그 아래에는 원래 코드들이 계속 이어집니다)
+
+
+
+
 
 # --- 1. 페이지 설정 및 디자인 ---
 st.set_page_config(
