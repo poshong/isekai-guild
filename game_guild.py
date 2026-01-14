@@ -184,35 +184,33 @@ def run_ocr_scan(image_file, scan_mode):
 
             return "sage", {"dmg": found_dmg, "kill": found_kill}, "현자 도전 분석 완료"
             
-    except Exception as e:
-        return "error", {}, f"구글 AI 연동 오류: {e}"
-    
-    
-        # 👇 [3] [추가된 부분] 투력 업데이트 모드 👇
+
+
+    # 👇 [3] [새로 업데이트] 투력 업데이트 모드 (여기로 위치 변경!) 👇
         elif mode == "power":
-            # 패턴: "닉네임 - 숫자억" (예: 레아 - 576.7억)
-            # 1. (글자들) -> 이름
-            # 2. (-) -> 구분자
-            # 3. (숫자와점) -> 투력
+            # 여기서 정규표현식(re)을 씁니다. (맨 위에 import re 했는지 확인!)
             pattern = re.compile(r'([가-힣a-zA-Z0-9]+)\s*-\s*([\d\.]+)')
-        
+            
             for line in lines:
                 match = pattern.search(line)
                 if match:
-                    name = match.group(1).strip() # 이름 (예: 레아)
-                    power_val = float(match.group(2)) # 숫자 (예: 576.7)
-                
+                    name = match.group(1).strip()
+                    power_val = float(match.group(2))
+                    
                     data_list.append({
                         "name": name,
                         "power": power_val
                     })
-        
+            
             if data_list:
                 return "power", data_list, None
             else:
                 return "error", None, "투력 패턴(이름 - 숫자억)을 찾지 못했습니다."
+                
+        return "error", None, "알 수 없는 모드이거나 데이터 없음"
 
-        return "error", None, "알 수 없는 모드입니다."
+    except Exception as e:
+        return "error", None, f"구글 AI 연동 오류: {e}"
 
 
 
