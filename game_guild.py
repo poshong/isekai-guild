@@ -527,7 +527,7 @@ def main_app():
 
 
 
-        aa
+        
         # [작은 탭 1] 기부 내역 올리는 곳
         with sub_tab1:
             uploaded_dons = st.file_uploader("기부 스샷 (여러 장 가능)", type=['png', 'jpg'], accept_multiple_files=True, key="up_don")
