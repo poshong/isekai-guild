@@ -527,35 +527,40 @@ def main_app():
 
 
 
+        aa
         # [작은 탭 1] 기부 내역 올리는 곳
         with sub_tab1:
-            # 1. accept_multiple_files=True 추가 (여러 장 선택 가능)
             uploaded_dons = st.file_uploader("기부 스샷 (여러 장 가능)", type=['png', 'jpg'], accept_multiple_files=True, key="up_don")
     
-            # 2. 파일이 하나라도 있고 버튼을 누르면 시작
             if uploaded_dons and st.button("기부 분석", key="btn_don", type="primary"):
                 with st.spinner(f"스크린샷 {len(uploaded_dons)}장 분석 중..."):
             
-                    all_donation_data = [] # 모든 결과를 모을 바구니
+                    # 👇 핵심 수정: [] (리스트)가 아니라 {} (사전/딕셔너리)를 사용합니다.
+                    all_donation_data = {} 
                     success_count = 0
             
-                    # 3. 반복문으로 파일 하나씩 꺼내서 분석
                     for file in uploaded_dons:
                         rtype, rdata, rmsg = run_ocr_scan(file, "donation")
                 
                         if rtype == "donation":
-                            # 찾은 명단을 바구니에 추가 (extend는 리스트를 합치는 명령어)
-                            all_donation_data.extend(rdata)
+                            # 여러 장의 스샷에서 나온 기부 내역을 꼼꼼하게 합쳐주는 마법의 코드
+                            for name, data in rdata.items():
+                                if name in all_donation_data:
+                                    # 이미 앞 사진에서 발견된 사람이면, 기부 횟수를 기존 숫자에 더해줍니다.
+                                    for key, val in data.items():
+                                        all_donation_data[name][key] = all_donation_data[name].get(key, 0) + val
+                                else:
+                                    # 처음 발견된 사람이면 그대로 장부에 적습니다.
+                                    all_donation_data[name] = data
+                    
                             success_count += 1
                         else:
                             st.warning(f"실패한 파일이 있습니다: {rmsg}")
 
-                    # 4. 최종 결과 보여주기
                     if success_count > 0:
                         st.success(f"분석 완료! 총 {len(all_donation_data)}명의 데이터를 찾았습니다.")
-                        st.json(all_donation_data) # 전체 명단 보여주기
+                        st.json(all_donation_data) # 이제 이름뿐만 아니라 세부 내역도 잘 뜰 겁니다!
                 
-                        # 세션에 저장 (나중에 엑셀 저장 등을 위해)
                         st.session_state['scan_mode'] = 'donation'
                         st.session_state['scan_data'] = all_donation_data
                     else:
